@@ -1,0 +1,23 @@
+{
+  "name": "Daraz Homepage Category Tiles",
+  "baseSelector": "div.card-categories-li.hp-mod-card-hover",
+  "fields": [
+    {
+      "name": "category_name",
+      "selector": ".card-categories-name .text",
+      "type": "text"
+    },
+    {
+      "name": "category_link",
+      "selector": "a.pc-custom-link.card-categories-li-content",
+      "type": "attribute",
+      "attribute": "href"
+    },
+    {
+      "name": "category_image",
+      "selector": ".picture-wrapper.common-img.card-categories-image img",
+      "type": "attribute",
+      "attribute": "src"
+    }
+  ]
+}
