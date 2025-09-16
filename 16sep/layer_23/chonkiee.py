@@ -1,466 +1,560 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
-RAG over Daraz-scraped product JSON files (result/<category>/products.json)
+RAG for Daraz product Q&A over local JSON dumps.
 
-- Uses Chonkie for chunking
-- Embeds chunks with sentence-transformers (all-MiniLM-L6-v2)
-- Searches with FAISS (or NumPy fallback)
-- Generates with a free local LLM (FLAN-T5 base)
-- No CLI args: set QUERY and ROOT_DIR below and run:  python rag_products.py
+- Expects folder layout:
+  result/
+    www_daraz_com_bd_.../
+      products.json
+      (other files ignored)
 
-Swap to OpenAI later:
-- Implement OpenAI in LLMProvider.generate(), or add a new provider class and switch in build_llm().
+- Uses Chonkie for chunking and OpenAI embeddings + LLM for answers.
+- Embedding cache is persisted to: .rag_cache/embeddings.sqlite
 
-Tested with: Python 3.10+
+Run:
+  python products_rag.py
+
+Edit the QUERY constant below to ask a different question.
 """
 
-from __future__ import annotations
-
-import json
 import os
-import re
 import sys
-import textwrap
+import json
+import glob
+import time
+import math
+import sqlite3
+import hashlib
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
-# ---- RAG CONFIG (edit as you like) ------------------------------------------
-ROOT_DIR = Path("result")                         # your scraped root folder
-QUERY = "Recommend 3 faucet filters under ৳250 with high ratings and many sales."
-TOP_K = 8                                         # how many chunks to retrieve
-CHARS_LIMIT_CONTEXT = 1800                        # flan-t5-base has ~512 token limit
-EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-GEN_MODEL_NAME = "google/flan-t5-base"
-# -----------------------------------------------------------------------------
+import numpy as np
 
-# ---- Imports (lazy-fail with helpful messages) -------------------------------
-try:
-    from chonkie import RecursiveChunker   # https://github.com/chonkie-inc/chonkie
-except Exception as e:
-    print("ERROR: chonkie is required. Install with: pip install chonkie", file=sys.stderr)
-    raise
+# --- OpenAI client (Responses + Embeddings) ---
+from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv()  # load OPENAI_API_KEY from .env if present
 
-try:
-    import numpy as np
-except Exception as e:
-    print("ERROR: numpy is required. Install with: pip install numpy", file=sys.stderr)
-    raise
+# --- Chunking with Chonkie ---
+# You can swap to TokenChunker if you install extras: from chonkie import TokenChunker
+from chonkie import RecursiveChunker
 
-# sentence-transformers for embeddings
-try:
-    from sentence_transformers import SentenceTransformer
-except Exception:
-    print("ERROR: sentence-transformers is required. Install with: pip install sentence-transformers", file=sys.stderr)
-    raise
+# =========================
+# Configuration
+# =========================
+RESULTS_DIR = "result"  # root folder you described
+EMBED_MODEL = "text-embedding-3-small"  # fast + strong multilingual
+EMBED_DIMS = 512  # shrink dims to 512 for speed/memory (supported for -3 models)
+LLM_MODEL = "gpt-4o-mini"  # good cost/latency balance
+TOP_K = 15  # retrieved chunks to send to the LLM
+CHUNK_MAX_CHARS = 1800  # let chonkie decide; recursive chunking keeps these sane
+CHUNK_OVERLAP = 180
+CACHE_DIR = ".rag_cache"
+CACHE_DB_PATH = os.path.join(CACHE_DIR, "embeddings.sqlite")
 
-# transformers for free local LLM (FLAN-T5)
-try:
-    import torch
-    from transformers import pipeline
-except Exception:
-    print("ERROR: transformers/torch are required. Install with: pip install transformers accelerate torch", file=sys.stderr)
-    raise
+# Put your question here (no CLI args needed)
+QUERY = (
+    "From all categories, list 8 drone of highest price "
+    "with the best rating and highest number of ratings. Include name, price, "
+    "rating (avg & count), seller, and the product URL."
+)
 
-# FAISS for fast ANN (optional but recommended)
-try:
-    import faiss  # type: ignore
-    _HAVE_FAISS = True
-except Exception:
-    _HAVE_FAISS = False
+# =========================
+# Utilities
+# =========================
 
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
 
-# ---- Utility dataclasses -----------------------------------------------------
-@dataclass
-class ChunkRecord:
-    text: str
-    product_id: str
-    product_title: str
-    category: str
-    url: str
-    brand: Optional[str] = None
-    price_display: Optional[str] = None
-    rating_avg: Optional[float] = None
-    rating_count: Optional[int] = None
+def sha256(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
+def now_ts() -> int:
+    return int(time.time())
 
-# ---- I/O: Load JSON files ----------------------------------------------------
-def find_products_jsons(root: Path) -> List[Path]:
+def to_float_bdt(x: Any) -> float:
     """
-    Return a list of paths to products.json in result/<category>/products.json
+    Try to parse values like '৳ 172', '172.0', 'BDT 199', etc. Return float or NaN.
     """
-    paths: List[Path] = []
-    if not root.exists():
-        print(f"WARNING: {root} does not exist.", file=sys.stderr)
-        return paths
-
-    for sub in sorted(root.iterdir()):
-        if sub.is_dir():
-            pj = sub / "products.json"
-            if pj.exists():
-                paths.append(pj)
-    return paths
-
-
-def load_products(products_json: Path) -> Iterable[Dict[str, Any]]:
-    """
-    Yield each product dict from products.json (list at top-level).
-    Continue on JSON errors (robust to imperfect files).
-    """
+    if x is None:
+        return float("nan")
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x)
+    # remove currency symbol and commas/spaces
+    for tok in ["৳", "BDT", "Tk", "tk", "৳.", "৳. "]:
+        s = s.replace(tok, "")
+    s = s.replace(",", " ").replace("\u00a0", " ").strip()
+    # keep first numeric token
+    num = ""
+    for ch in s:
+        if ch.isdigit() or ch in ".-":
+            num += ch
+        elif num:
+            break
     try:
-        with products_json.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict):
-                        yield item
-            else:
-                print(f"WARNING: {products_json} is not a list.", file=sys.stderr)
-    except Exception as e:
-        print(f"ERROR reading {products_json}: {e}", file=sys.stderr)
+        return float(num) if num else float("nan")
+    except Exception:
+        return float("nan")
 
-
-# ---- Normalization helpers ---------------------------------------------------
-_WS = re.compile(r"\s+")
-
-def squash_ws(s: str | None) -> str:
-    if not s:
-        return ""
-    return _WS.sub(" ", str(s)).strip()
-
-def to_https(url: Optional[str]) -> str:
-    if not url:
-        return ""
-    url = url.strip()
-    if url.startswith("//"):
-        return "https:" + url
-    if not url.startswith("http"):
-        # fall back to https if relative (rare in your data since detail_url is absolute)
-        return "https://" + url.lstrip("/")
-    return url
-
-def safe_get(d: Dict[str, Any], *keys, default=None) -> Any:
-    cur: Any = d
-    for k in keys:
-        if isinstance(cur, dict) and k in cur:
-            cur = cur[k]
+def safe_get(d: Dict, *path, default=None):
+    cur = d
+    for p in path:
+        if isinstance(cur, dict) and p in cur:
+            cur = cur[p]
         else:
             return default
     return cur
 
-def list_preview(values: List[Any], limit: int = 5) -> str:
-    vs = [squash_ws(str(v)) for v in values if str(v).strip()]
-    if len(vs) <= limit:
-        return ", ".join(vs)
-    return ", ".join(vs[:limit]) + f" …(+{len(vs)-limit} more)"
+def join_unique(items: Iterable[str], sep: str = ", ") -> str:
+    seen = []
+    for x in items:
+        if not x:
+            continue
+        x = str(x).strip()
+        if x and x not in seen:
+            seen.append(x)
+    return sep.join(seen)
 
+# =========================
+# Loading & Normalization
+# =========================
 
-# ---- Product -> Document text ------------------------------------------------
-def product_to_text_and_meta(prod: Dict[str, Any], category_name: str) -> Tuple[str, Dict[str, Any]]:
+@dataclass
+class ProductMeta:
+    category: str
+    product_id: str
+    title: str
+    url: str
+    price_value: float
+    price_display: str
+    rating_avg: float
+    rating_count: int
+    brand: str
+    seller: str
+
+@dataclass
+class ChunkRecord:
+    chunk_id: str
+    text: str
+    meta: ProductMeta
+    chunk_index: int
+
+def product_to_text(prod: Dict[str, Any], category: str, source_path: str) -> Tuple[str, ProductMeta]:
     """
-    Build a single textual document per product that captures the important fields:
-    title, brand, price (display/value/original/discount), rating, sold, seller,
-    description, specs, return/warranty, images (count), and all variants (color/size/price).
+    Flatten a product JSON into a compact text record suitable for retrieval.
+    Covers top-level, detail.*, seller.*, variants.*, etc.
     """
-    item_id = str(prod.get("data_item_id") or prod.get("data_sku_simple") or "")
-    title = squash_ws(prod.get("product_title") or safe_get(prod, "detail", "name") or "")
-    url = to_https(prod.get("detail_url") or prod.get("product_detail_url") or safe_get(prod, "detail", "url") or "")
-    brand = squash_ws(safe_get(prod, "detail", "brand"))
-    price_display = squash_ws(safe_get(prod, "detail", "price", "display") or prod.get("product_price"))
-    price_value = safe_get(prod, "detail", "price", "value")
-    price_original = safe_get(prod, "detail", "price", "original_value")
-    discount_pct = safe_get(prod, "detail", "price", "discount_percent")
-    rating_avg = safe_get(prod, "detail", "rating", "average")
-    rating_cnt = safe_get(prod, "detail", "rating", "count")
-    sold_str = squash_ws(prod.get("location"))  # e.g., "536 sold"
-    seller_name = squash_ws(safe_get(prod, "detail", "seller", "name"))
-    seller_metrics = safe_get(prod, "detail", "seller", "metrics") or {}
-    description = squash_ws(safe_get(prod, "detail", "details", "description_text"))
-    highlights = safe_get(prod, "detail", "details", "highlights") or []
-    return_and_warranty = safe_get(prod, "detail", "return_and_warranty") or []
-    images = safe_get(prod, "detail", "images") or []
-    colors = safe_get(prod, "detail", "colors") or []
-    sizes = safe_get(prod, "detail", "sizes") or []
-    variants = safe_get(prod, "detail", "variants") or []
+    detail = prod.get("detail", {}) or {}
+    variants = detail.get("variants", []) or []
 
-    # Variants summary
-    variant_lines: List[str] = []
-    if isinstance(variants, list):
-        for v in variants:
-            vcolor = squash_ws(v.get("color"))
-            vprice_disp = squash_ws(safe_get(v, "price", "display"))
-            vsizes = v.get("sizes") or []
-            variant_lines.append(
-                f"- variant color: {vcolor or 'N/A'} | price: {vprice_disp or 'N/A'} | sizes: {', '.join(vsizes) if vsizes else 'N/A'}"
-            )
+    pid = (
+        prod.get("data_item_id")
+        or safe_get(detail, "url")
+        or safe_get(detail, "name")
+        or sha256(json.dumps(prod, sort_keys=True)[:256])
+    )
+    title = (
+        prod.get("product_title")
+        or safe_get(detail, "name")
+        or f"Product {pid}"
+    )
 
-    # Seller metrics text
-    seller_metrics_txt = "; ".join([f"{k}: {squash_ws(v)}" for k, v in seller_metrics.items()]) if seller_metrics else ""
+    url = (
+        prod.get("detail_url")
+        or prod.get("product_detail_url", "")
+        or safe_get(detail, "url", default="")
+    )
+    # normalize //www.daraz.com.bd/... to https
+    if url.startswith("//"):
+        url = "https:" + url
 
-    # Build document text (balanced for retrieval)
-    parts = [
-        f"CATEGORY: {category_name}",
-        f"ITEM_ID: {item_id}",
+    # prices
+    price_disp = (
+        prod.get("product_price")
+        or safe_get(detail, "price", "display", default="")
+    )
+    price_val = (
+        to_float_bdt(safe_get(detail, "price", "value"))
+        if not price_disp
+        else to_float_bdt(price_disp)
+    )
+    orig_disp = safe_get(detail, "price", "original_display", default="")
+    discount_disp = safe_get(detail, "price", "discount_display", default="")
+    discount_pct = safe_get(detail, "price", "discount_percent", default=None)
+
+    # rating
+    rating_avg = float(safe_get(detail, "rating", "average", default=float("nan")) or float("nan"))
+    rating_count = int(safe_get(detail, "rating", "count", default=0) or 0)
+
+    brand = safe_get(detail, "brand", default="No Brand") or "No Brand"
+    seller_name = safe_get(detail, "seller", "name", default="") or ""
+    seller_metrics = safe_get(detail, "seller", "metrics", default={}) or {}
+    metrics_str = "; ".join(f"{k}: {v}" for k, v in seller_metrics.items()) if seller_metrics else ""
+    seller = (seller_name + (f" ({metrics_str})" if metrics_str else "")).strip()
+
+    sold_str = prod.get("location", "")  # often "536 sold"
+    colors = (safe_get(detail, "colors") or []) + [v.get("color") for v in variants if v.get("color")]
+    sizes = []
+    for v in variants:
+        sizes.extend(v.get("sizes") or [])
+
+    # delivery, returns, description
+    delivery_options = safe_get(detail, "delivery_options", default=[]) or []
+    delivery_str = "; ".join(
+        " / ".join(str(x.get(k, "")).strip() for k in ("title", "time", "fee") if x.get(k))
+        for x in delivery_options
+    )
+    returns = join_unique(safe_get(detail, "return_and_warranty", default=[]) or [])
+    desc = (
+        safe_get(detail, "details", "description_text")
+        or safe_get(detail, "details", "raw_text")
+        or ""
+    )
+    # images (limit to a few—helps answer "does it include X?" queries)
+    imgs = (safe_get(detail, "images") or [])[:4]
+
+    # variants summary
+    var_lines = []
+    for v in variants[:12]:
+        v_price = safe_get(v, "price", "display") or safe_get(v, "price", "value")
+        v_sizes = join_unique(v.get("sizes") or [])
+        v_imgs = "; ".join((v.get("images") or [])[:2])
+        var_lines.append(
+            f"- color: {v.get('color') or 'N/A'} | price: {v_price} | sizes: {v_sizes or '—'} | images: {v_imgs}"
+        )
+    variants_str = "\n".join(var_lines)
+
+    lines = [
         f"TITLE: {title}",
-        f"BRAND: {brand or 'No Brand'}",
-        f"PRICE: {price_display or 'N/A'} (value: {price_value}, original: {price_original}, discount%: {discount_pct})",
-        f"RATING: {rating_avg if rating_avg is not None else 'N/A'} ({rating_cnt if rating_cnt is not None else 0} ratings)",
-        f"SALES: {sold_str or 'N/A'}",
-        f"SELLER: {seller_name or 'N/A'}; {seller_metrics_txt or ''}".strip(),
-        f"COLORS: {list_preview(colors) if isinstance(colors, list) else colors or 'N/A'}",
-        f"SIZES: {list_preview(sizes) if isinstance(sizes, list) and sizes else 'N/A'}",
-        f"IMAGES: {len(images)} found",
+        f"CATEGORY: {category}",
+        f"PRODUCT_ID: {pid}",
+        f"URL: {url}",
+        f"PRICE: {price_disp or price_val} | ORIGINAL: {orig_disp or ''} | DISCOUNT: {discount_disp or discount_pct or ''}",
+        f"PRICE_VALUE_NUMERIC: {price_val}",
+        f"RATING: avg={rating_avg} | count={rating_count}",
+        f"BRAND: {brand}",
+        f"SELLER: {seller}",
+        f"SOLD: {sold_str}",
+        f"COLORS: {join_unique(colors)}",
+        f"SIZES: {join_unique(sizes)}",
+        f"DELIVERY: {delivery_str}",
+        f"RETURNS: {returns}",
+        "IMAGES: " + "; ".join(imgs),
+        "DESCRIPTION:",
+        desc.strip(),
     ]
+    if variants_str:
+        lines.append("VARIANTS:\n" + variants_str)
 
-    if highlights:
-        parts.append("HIGHLIGHTS: " + list_preview(highlights, limit=12))
-    if description:
-        parts.append("DESCRIPTION: " + description)
+    text = "\n".join(lines).strip()
 
-    if variant_lines:
-        parts.append("VARIANTS:\n" + "\n".join(variant_lines))
-
-    parts.append(f"URL: {url}")
-
-    text = "\n".join([p for p in parts if p and p.strip()])
-
-    meta = dict(
-        product_id=item_id,
-        product_title=title,
-        category=category_name,
-        url=url,
-        brand=brand or None,
-        price_display=price_display or None,
-        rating_avg=float(rating_avg) if isinstance(rating_avg, (int, float)) else None,
-        rating_count=int(rating_cnt) if isinstance(rating_cnt, (int, float)) else None,
+    meta = ProductMeta(
+        category=category,
+        product_id=str(pid),
+        title=str(title),
+        url=str(url),
+        price_value=float(price_val) if price_val == price_val else float("nan"),
+        price_display=str(price_disp or ""),
+        rating_avg=float(rating_avg) if rating_avg == rating_avg else float("nan"),
+        rating_count=int(rating_count),
+        brand=str(brand),
+        seller=str(seller or ""),
     )
     return text, meta
 
-
-# ---- Chunking (Chonkie) ------------------------------------------------------
-def chunk_product_text(text: str, chunker: RecursiveChunker) -> List[str]:
+def iter_products(result_dir: str) -> Iterable[Tuple[str, Dict[str, Any]]]:
     """
-    Use Chonkie's RecursiveChunker to produce chunks. We keep each chunk as a clean string.
+    Yields (category_name, product_dict)
     """
-    chunks = chunker(text)  # per Chonkie README, chunkers are callable
-    out: List[str] = []
-    for ch in chunks:
-        # ch.text is the text; optional: keep token count ch.token_count
-        out.append(squash_ws(ch.text))
-    return out
+    pattern = os.path.join(result_dir, "*", "products.json")
+    for path in glob.glob(pattern):
+        category = os.path.basename(os.path.dirname(path))
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                continue
+            for prod in data:
+                if isinstance(prod, dict):
+                    yield category, prod
+        except Exception as e:
+            print(f"[warn] Failed to load {path}: {e}", file=sys.stderr)
 
+# =========================
+# Chunking
+# =========================
 
-# ---- Embeddings --------------------------------------------------------------
-class Embedder:
-    def __init__(self, model_name: str = EMBED_MODEL_NAME):
-        self.model = SentenceTransformer(model_name)
-        # We'll use cosine similarity with normalized vectors
-    def encode(self, texts: List[str]) -> np.ndarray:
-        vecs = self.model.encode(texts, batch_size=64, show_progress_bar=False, normalize_embeddings=True)
-        return np.asarray(vecs, dtype=np.float32)
-
-# ---- Vector index ------------------------------------------------------------
-class VectorIndex:
-    def __init__(self, dim: int):
-        self.dim = dim
-        self.use_faiss = _HAVE_FAISS
-        self.embeddings: Optional[np.ndarray] = None
-        self.index = None
-    def build(self, embeddings: np.ndarray):
-        self.embeddings = embeddings.astype(np.float32)
-        if self.use_faiss:
-            self.index = faiss.IndexFlatIP(self.dim)
-            self.index.add(self.embeddings)
-        else:
-            # Will use NumPy dot as fallback
-            self.index = None
-    def search(self, qvec: np.ndarray, top_k: int) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Return (scores, indices)
-        - scores: shape (top_k,)
-        - indices: shape (top_k,)
-        """
-        if qvec.ndim == 1:
-            qvec = qvec[None, :]
-        if self.use_faiss and self.index is not None:
-            sims, idxs = self.index.search(qvec.astype(np.float32), top_k)
-            return sims[0], idxs[0]
-        # cosine with normalized vectors => dot product
-        assert self.embeddings is not None
-        sims = (self.embeddings @ qvec.T).ravel()
-        idxs = np.argsort(-sims)[:top_k]
-        return sims[idxs], idxs
-
-
-# ---- Free LLM (local) + abstraction for later OpenAI swap --------------------
-class LLMProvider:
-    """
-    Minimal abstraction to swap the generator later.
-    """
-    def __init__(self, model_name: str = GEN_MODEL_NAME):
-        device = 0 if torch.cuda.is_available() else -1
-        # FLAN-T5 is seq2seq; pipeline handles tokenizer/model for us
-        self.pipe = pipeline(
-            "text2text-generation",
-            model=model_name,
-            device=device,
+def chunk_product(text: str, meta: ProductMeta, chunker: RecursiveChunker) -> List[ChunkRecord]:
+    # Chonkie returns an iterable of chunks with .text
+    chunks = chunker(text)
+    records: List[ChunkRecord] = []
+    for i, ch in enumerate(chunks):
+        chunk_text = ch.text
+        # Light size control: truncate overly huge chunks to keep LLM fast
+        if len(chunk_text) > CHUNK_MAX_CHARS:
+            chunk_text = chunk_text[:CHUNK_MAX_CHARS]
+        rec = ChunkRecord(
+            chunk_id=f"{meta.product_id}__{i}",
+            text=chunk_text,
+            meta=meta,
+            chunk_index=i,
         )
+        records.append(rec)
+    return records
 
-    def generate(self, prompt: str, max_new_tokens: int = 256, temperature: float = 0.2) -> str:
-        out = self.pipe(
-            prompt,
-            max_new_tokens=max_new_tokens,
-            do_sample=(temperature > 0.0),
-            temperature=temperature if temperature > 0 else 1.0,
-            num_return_sequences=1,
-            truncation=True,
+# =========================
+# Embedding Cache (SQLite)
+# =========================
+
+class EmbeddingCache:
+    def __init__(self, db_path: str):
+        ensure_dir(os.path.dirname(db_path))
+        self.conn = sqlite3.connect(db_path)
+        self._init_db()
+
+    def _init_db(self):
+        cur = self.conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                key TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                dims INTEGER NOT NULL,
+                vec BLOB NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+        """)
+        self.conn.commit()
+
+    def get(self, key: str) -> np.ndarray | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT dims, vec FROM embeddings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        dims, blob = row
+        arr = np.frombuffer(blob, dtype=np.float32)
+        if arr.size != dims:
+            return None
+        return arr
+
+    def set(self, key: str, model: str, dims: int, vec: np.ndarray):
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO embeddings (key, model, dims, vec, created_at) VALUES (?, ?, ?, ?, ?)",
+            (key, model, dims, vec.astype(np.float32).tobytes(), now_ts()),
         )
-        return out[0]["generated_text"]
+        self.conn.commit()
 
-    # --- To switch to OpenAI later:
-    # def generate(self, prompt: str, ...):
-    #     import openai
-    #     client = openai.OpenAI(api_key=...)
-    #     resp = client.chat.completions.create( ... )
-    #     return resp.choices[0].message.content
+    def close(self):
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
-
-def build_llm() -> LLMProvider:
-    return LLMProvider(GEN_MODEL_NAME)
-
-
-# ---- Retrieval pipeline ------------------------------------------------------
-def pack_context(chunks: List[ChunkRecord], limit_chars: int = CHARS_LIMIT_CONTEXT) -> str:
+def embed_texts_with_cache(
+    client: OpenAI,
+    texts: List[str],
+    model: str = EMBED_MODEL,
+    dims: int = EMBED_DIMS,
+    cache: EmbeddingCache | None = None,
+    batch_size: int = 64,
+) -> List[np.ndarray]:
     """
-    Join chunk texts with separators until we hit a safe character budget for the generator.
+    Embeds a list of texts, caching results in SQLite by content hash.
     """
-    buf: List[str] = []
-    total = 0
-    for c in chunks:
-        piece = c.text.strip()
-        if not piece:
+    out: List[np.ndarray] = [None] * len(texts)  # type: ignore
+    missing_idx: List[int] = []
+    keys: List[str] = []
+    for i, t in enumerate(texts):
+        key = sha256(f"{model}:{dims}:{t}")
+        keys.append(key)
+        if cache:
+            vec = cache.get(key)
+            if vec is not None:
+                out[i] = vec
+                continue
+        missing_idx.append(i)
+
+    # Embed the missing ones in batches
+    for bstart in range(0, len(missing_idx), batch_size):
+        bindices = missing_idx[bstart : bstart + batch_size]
+        batch = [texts[i] for i in bindices]
+        if not batch:
             continue
-        # add a header to preserve product boundaries for the LLM
-        header = f"\n---\nTITLE: {c.product_title}\nCATEGORY: {c.category}\nURL: {c.url}\n"
-        add = header + piece
-        if total + len(add) > limit_chars and buf:
-            break
-        buf.append(add)
-        total += len(add)
-    return "".join(buf).strip()
+        resp = client.embeddings.create(
+            model=model,
+            input=batch,
+            encoding_format="float",
+            dimensions=dims,
+        )
+        # response order matches input order
+        for local_i, i_global in enumerate(bindices):
+            vec = np.array(resp.data[local_i].embedding, dtype=np.float32)
+            out[i_global] = vec
+            if cache:
+                cache.set(keys[i_global], model, dims, vec)
 
+    # fill type checker
+    return [v if isinstance(v, np.ndarray) else np.zeros((dims,), dtype=np.float32) for v in out]
 
-def make_prompt(query: str, context: str) -> str:
+# =========================
+# Retrieval
+# =========================
+
+@dataclass
+class BuiltIndex:
+    embeddings: np.ndarray  # (N, D) L2-normalized
+    chunks: List[ChunkRecord]
+
+def build_index(client: OpenAI, chunks: List[ChunkRecord]) -> BuiltIndex:
+    texts = [c.text for c in chunks]
+    cache = EmbeddingCache(CACHE_DB_PATH)
+    try:
+        vecs = embed_texts_with_cache(client, texts, cache=cache, dims=EMBED_DIMS)
+    finally:
+        cache.close()
+
+    mat = np.vstack(vecs)  # (N, D)
+    # L2 normalize
+    norms = np.linalg.norm(mat, axis=1, keepdims=True) + 1e-12
+    mat = mat / norms
+    return BuiltIndex(embeddings=mat, chunks=chunks)
+
+def search(
+    client: OpenAI,
+    index: BuiltIndex,
+    query: str,
+    top_k: int = TOP_K,
+) -> List[Tuple[float, ChunkRecord]]:
+    q_vec = embed_texts_with_cache(client, [query], dims=EMBED_DIMS)[0]
+    q_vec = q_vec / (np.linalg.norm(q_vec) + 1e-12)
+    scores = index.embeddings @ q_vec
+    # Top-K
+    if top_k >= len(scores):
+        top_idx = np.argsort(-scores)
+    else:
+        # argpartition is faster
+        part = np.argpartition(scores, -top_k)[-top_k:]
+        top_idx = part[np.argsort(-scores[part])]
+    results = [(float(scores[i]), index.chunks[i]) for i in top_idx]
+    return results
+
+# =========================
+# LLM Answer
+# =========================
+
+SYSTEM_INSTRUCTIONS = """You are a product QA assistant for a Daraz-like catalog.
+Answer ONLY using the provided context chunks. If the answer is not present, say "I don't know".
+Prefer numeric fields like PRICE_VALUE_NUMERIC, RATING avg/count, and always include product URLs.
+If the user asks for filtering (e.g., price thresholds, rating), apply those using the numbers present.
+When listing multiple items, sort by the user's criteria; if ambiguous, sort by rating (avg desc, then count desc).
+Return a concise answer followed by a bulleted list or simple table of the chosen products.
+"""
+
+def make_context_block(hits: List[Tuple[float, ChunkRecord]], max_products: int = 12) -> str:
     """
-    Compact instruction tuned for product Q&A with price/rating constraints.
+    Merge top chunks, limiting to a handful of products and 1-2 chunks/product.
     """
-    return textwrap.dedent(f"""
-    You are a helpful e-commerce product analyst. Answer the QUESTION using only the CONTEXT.
-    If something isn't in the context, say you don't know. Prefer concise bullet points listing product name, price, rating, seller, and the URL.
-    Use the currency symbols as shown (e.g., ৳). If asking for "top" or "best", justify briefly using rating/sales/discount.
+    by_pid: Dict[str, List[Tuple[float, ChunkRecord]]] = {}
+    for score, rec in hits:
+        by_pid.setdefault(rec.meta.product_id, []).append((score, rec))
 
-    CONTEXT:
-    {context}
+    # Keep best N products, 2 chunks each
+    # score per product = max score among its chunks
+    ranked_pids = sorted(
+        by_pid.keys(),
+        key=lambda pid: max(s for s, _ in by_pid[pid]),
+        reverse=True,
+    )[:max_products]
 
-    QUESTION: {query}
+    blocks = []
+    for pid in ranked_pids:
+        entries = sorted(by_pid[pid], key=lambda x: x[0], reverse=True)[:2]
+        header = f"[PRODUCT {pid}] {entries[0][1].meta.title} | URL: {entries[0][1].meta.url}"
+        body = "\n-----\n".join(rec.text for _, rec in entries)
+        blocks.append(header + "\n" + body)
+    return "\n\n====================\n\n".join(blocks)
 
-    ANSWER:
-    """).strip()
+def answer_with_llm(client: OpenAI, query: str, context: str) -> str:
+    prompt = (
+        SYSTEM_INSTRUCTIONS
+        + "\n\nQuestion:\n"
+        + query
+        + "\n\nContext (top retrieved chunks):\n"
+        + context
+        + "\n\nAnswer:"
+    )
+    resp = client.responses.create(
+        model=LLM_MODEL,
+        input=prompt,
+        max_output_tokens=500,
+        temperature=0.0,
+    )
+    # Try convenience property; fallback to manual traversal
+    text = getattr(resp, "output_text", None)
+    if not text:
+        try:
+            text = resp.output[0].content[0].text  # type: ignore[attr-defined]
+        except Exception:
+            text = str(resp)
+    return text
 
+# =========================
+# Main pipeline
+# =========================
 
-# ---- Main build + query ------------------------------------------------------
-def build_corpus(root: Path) -> Tuple[List[str], List[ChunkRecord]]:
-    """
-    1) For each product => text + meta
-    2) Chunk with Chonkie
-    3) Return chunk_texts + chunk_meta aligned
-    """
-    chunker = RecursiveChunker()
-    chunk_texts: List[str] = []
-    chunk_meta: List[ChunkRecord] = []
-
-    product_count = 0
-    for pj in find_products_jsons(root):
-        category_name = pj.parent.name
-        for prod in load_products(pj):
-            product_count += 1
-            text, meta = product_to_text_and_meta(prod, category_name)
-            # Chunk
-            pieces = chunk_product_text(text, chunker)
-            # Capture aligned
-            for p in pieces:
-                chunk_texts.append(p)
-                chunk_meta.append(ChunkRecord(
-                    text=p,
-                    product_id=meta["product_id"] or "",
-                    product_title=meta["product_title"] or "",
-                    category=meta["category"] or category_name,
-                    url=meta["url"] or "",
-                    brand=meta.get("brand"),
-                    price_display=meta.get("price_display"),
-                    rating_avg=meta.get("rating_avg"),
-                    rating_count=meta.get("rating_count"),
-                ))
-
-    print(f"[build_corpus] categories={len(set(cm.category for cm in chunk_meta))} "
-          f"products≈{product_count} chunks={len(chunk_texts)}")
-    return chunk_texts, chunk_meta
-
-
-def retrieve(query: str,
-             embedder: Embedder,
-             vindex: VectorIndex,
-             chunk_texts: List[str],
-             chunk_meta: List[ChunkRecord],
-             top_k: int) -> List[ChunkRecord]:
-    qvec = embedder.encode([query])[0]
-    _, idxs = vindex.search(qvec, top_k=top_k)
-    return [chunk_meta[i] for i in idxs.tolist()]
-
-
-def answer_query(query: str, root: Path) -> Tuple[str, List[ChunkRecord]]:
-    # Build corpus (chunks + meta)
-    chunk_texts, chunk_meta = build_corpus(root)
-
-    if not chunk_texts:
-        return "No chunks found (did you put the 'result' folder next to this script?).", []
-
-    # Embed all chunks
-    embedder = Embedder(EMBED_MODEL_NAME)
-    mat = embedder.encode(chunk_texts)
-    dim = mat.shape[1]
-
-    # Build index
-    vindex = VectorIndex(dim)
-    vindex.build(mat)
-
-    # Retrieve
-    top_chunks = retrieve(query, embedder, vindex, chunk_texts, chunk_meta, TOP_K)
-
-    # Pack context and ask LLM
-    context = pack_context(top_chunks, limit_chars=CHARS_LIMIT_CONTEXT)
-    llm = build_llm()
-    prompt = make_prompt(query, context)
-    generated = llm.generate(prompt, max_new_tokens=320, temperature=0.2)
-    return generated.strip(), top_chunks
-
-
-# ---- Script entry ------------------------------------------------------------
 def main():
-    print(f"QUERY: {QUERY}\n")
-    answer, used_chunks = answer_query(QUERY, ROOT_DIR)
-    print("\n=== ANSWER ===\n")
+    # 1) Collect & normalize products
+    products_normalized: List[Tuple[str, ProductMeta]] = []
+    chunker = RecursiveChunker()  # simple, fast default
+
+    print("[info] Scanning categories and loading products...")
+    all_chunks: List[ChunkRecord] = []
+    count_products = 0
+
+    for category, prod in iter_products(RESULTS_DIR):
+        try:
+            text, meta = product_to_text(prod, category, source_path="")
+            # 2) Chunk with Chonkie
+            chunks = chunk_product(text, meta, chunker)
+            all_chunks.extend(chunks)
+            count_products += 1
+        except Exception as e:
+            print(f"[warn] product skipped due to error: {e}", file=sys.stderr)
+
+    if not all_chunks:
+        print("[error] No chunks built. Ensure 'result/*/products.json' exist.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[info] Loaded {count_products} products, built {len(all_chunks)} chunks.")
+
+    # 3) Build index (embeddings with cache)
+    client = OpenAI()  # uses OPENAI_API_KEY
+    print("[info] Embedding chunks (cached) and building index...")
+    index = build_index(client, all_chunks)
+
+    # 4) Retrieve
+    print("[info] Retrieving top chunks for the query...")
+    hits = search(client, index, QUERY, top_k=TOP_K)
+
+    # 5) Build concise context (limit products & chunks)
+    context = make_context_block(hits, max_products=12)
+
+    # 6) Ask LLM
+    print("[info] Asking the model...")
+    answer = answer_with_llm(client, QUERY, context)
+
+    # 7) Output
+    print("\n================ ANSWER ================\n")
     print(answer)
-    print("\n=== SOURCES USED ===")
-    seen = set()
-    for c in used_chunks:
-        key = (c.product_id, c.url)
-        if key in seen:
-            continue
-        seen.add(key)
-        print(f"- {c.product_title or '[No title]'}  |  {c.category}  |  {c.url}")
+    print("\n================ DEBUG (Top 10 Retrieved) ================\n")
+    for i, (score, rec) in enumerate(hits[:10], 1):
+        m = rec.meta
+        print(
+            f"{i:02d}. score={score:.4f} | {m.title[:80]} | ৳{m.price_value:.0f} | "
+            f"rating={m.rating_avg} ({m.rating_count}) | {m.url}"
+        )
 
 if __name__ == "__main__":
     main()
