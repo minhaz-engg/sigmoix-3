@@ -54,7 +54,7 @@ CACHE_DB_PATH = os.path.join(CACHE_DIR, "embeddings.sqlite")
 
 # Put your question here (no CLI args needed)
 QUERY = (
-    "From all categories, list 8 drone of highest price "
+    "From all categories, list 8 laptop of highest price "
     "with the best rating and highest number of ratings. Include name, price, "
     "rating (avg & count), seller, and the product URL."
 )
