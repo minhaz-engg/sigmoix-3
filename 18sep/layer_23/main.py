@@ -648,7 +648,7 @@ async def demo_css_structured_extraction_no_schema(link: str):
 async def main():
     print("=== Crawl4AI (category + PDP enrichment) ===")
     # any category/search URL
-    link = "https://www.daraz.com.bd/drones-accessories/"
+    link = "https://www.daraz.com.bd/womens-hijabs/"
     await demo_css_structured_extraction_no_schema(link)
     print("\n=== Operation Successful ===")
 
