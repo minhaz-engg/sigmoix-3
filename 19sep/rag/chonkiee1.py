@@ -1,46 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAG over Daraz product dumps (products.json per category).
+RAG Benchmark Harness (manual config, low-cost defaults)
+=======================================================
+- No CLI args; edit CONFIG below.
+- Experiments cover your tasks:
+  1) Chunking: Recursive (Chonkie), Sentence, optional Semantic.
+  2) Retrieval: Dense, BM25 (if installed), Hybrid, optional LLM re-rank (off by default).
+  3) Indexing: NumPy brute force, optional FAISS (Flat/IVF/HNSW) if installed.
 
-- Supports BOTH list- and dict-shaped JSON (dict: product_id -> product).
-- Normalizes rich fields: prices (current/original/discount), ratings, images,
-  colors, sizes, delivery options, return/warranty, seller metrics, variants.
-- Uses Chonkie (RecursiveChunker) to chunk robust product "documents".
-- Uses OpenAI Embeddings for retrieval and OpenAI Chat for answering.
-- Flat, dependency-light, fast; no vector DB (NumPy cosine + small cache).
-- Just set USER_QUERY and run:  python rag_products.py
+Cost-minimizing defaults:
+- Embeddings: text-embedding-3-small
+- Small dataset slice (max_docs), fewer queries (queries_per_doc), K=5
+- Semantic chunking OFF by default (turn on to test; costs an embed pass over sentences)
+- LLM re-rank OFF by default
 
-Folder layout expected:
-result/
-  ├── www_daraz_com_bd_kitchen_fixtures/
-  │     └── products.json
-  ├── www_daraz_com_bd_shop_bedding_sets/
-  │     └── products.json
-  └── ... (many categories)
-
-Notes:
-- JSON can vary a lot; normalization is defensive.
-- Only products.json is read in each category folder.
-
-Author: you + hippo power 🦛
+Author: you + hippo power 🦛 (2025-09-19)
 """
 
-import os, json, glob, re, hashlib, pickle, math, time
-from dataclasses import dataclass, field
+from __future__ import annotations
+import os, re, json, glob, time, math, hashlib, pickle, random, sys, gc
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from dotenv import load_dotenv
 
-load_dotenv()
 import numpy as np
+from dotenv import load_dotenv
+load_dotenv()
 
-# ---- OpenAI SDK (v1) ----
-from openai import OpenAI
-
-# ---- Chonkie (chunking) ----
-from chonkie import RecursiveChunker
-
-# ---- Optional: token-accurate chunk sizing; falls back to char-count ----
+# Optional deps (used only if present)
+try:
+    from rank_bm25 import BM25Okapi
+except Exception:
+    BM25Okapi = None
+try:
+    import faiss  # type: ignore
+except Exception:
+    faiss = None
 try:
     import tiktoken
     _enc = None
@@ -50,113 +45,96 @@ try:
             break
         except Exception:
             continue
-    if _enc is None:
-        raise RuntimeError("No tiktoken encoding found.")
-
     def count_tokens(s: str) -> int:
+        if _enc is None:
+            return max(1, len(s) // 4)
         return len(_enc.encode(s))
 except Exception:
     def count_tokens(s: str) -> int:
-        # rough heuristic if tiktoken not available
         return max(1, len(s) // 4)
 
+# OpenAI SDK
+from openai import OpenAI
 
-# =================== CONFIG ===================
+# Chonkie
+from chonkie import RecursiveChunker
 
-ROOT_DIR = os.getenv("RAG_ROOT_DIR", "../layer_23/result")  # your scraped data root
+# ========================= CONFIG (edit me) =========================
+CONFIG = {
+    # Paths
+    "root": "../layer_23/result",   # folder with */products.json
 
-# Embedding model (small = cheap/fast; change if you want)
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+    # Models (low-cost defaults)
+    "embed_model": os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small"),
+    "chat_model": os.getenv("OPENAI_CHAT_MODEL", "gpt-3.5-turbo"),   # only used if llm_rerank=True
 
-# Chat model for the final answer (change via env if you prefer)
-CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-3.5-turbo")
+    # Chunking strategies to evaluate
+    # Choose among: "recursive", "sentence", "semantic"
+    "chunkers": ["recursive", "sentence", "semantic"],   # keep semantic off by default (turn on to test)
 
-# Chunking: target token length and minimum chars
-CHUNK_SIZE_TOKENS = int(os.getenv("CHUNK_SIZE_TOKENS", "320"))
-MIN_CHARS_PER_CHUNK = int(os.getenv("MIN_CHARS_PER_CHUNK", "24"))
+    # Retrieval methods to evaluate
+    # Options: "dense", "bm25", "hybrid", "dense_rerank", "hybrid_rerank"
+    "retrievers": ["dense", "bm25", "hybrid", "dense_rerank", "hybrid_rerank"],      # "bm25"/"hybrid" will be skipped if rank_bm25 missing
 
-# Retrieval
-TOP_K_CHUNKS = int(os.getenv("TOP_K_CHUNKS", "12"))      # retrieve top-k chunks
-TOP_PRODUCTS = int(os.getenv("TOP_PRODUCTS", "6"))       # cap unique products in final context
+    # Vector index backends
+    # Options always safe: "numpy"
+    # Extra (if FAISS available): "faiss_flat", "faiss_ivf", "faiss_hnsw"
+    "indexes": ["numpy", "faiss_flat", "faiss_ivf", "faiss_hnsw"],
 
-# Embedding batching + cache
-EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "128"))
-EMBED_CACHE_PATH = os.getenv("EMBED_CACHE_PATH", ".emb_cache.pkl")
+    # Sampling + costs
+    "max_docs": 1000,              # limit dataset size
+    "queries_per_doc": 1,         # synth queries per doc (low cost)
+    "max_queries": 100,           # safety cap across all queries
+    "K": 5,                       # metrics@K
 
-# Put your question here (or set via env)
-USER_QUERY = os.getenv("RAG_QUERY", "show me some traditional laptop")
+    # Embedding batch + cache
+    "embed_batch_size": 512,
+    "embed_cache_path": ".emb_cache.pkl",
 
-# ==============================================
+    # Chunk sizes
+    "chunk_size_tokens": 320,
+    "min_chars_per_chunk": 24,
 
+    # Sentence chunker
+    "sent_overlap": 1,
 
-# ------------------ Data Models ------------------
+    # Semantic chunker (costly: embeds sentences)
+    "semantic_threshold": 0.72,
 
-@dataclass
-class Variant:
-    color: Optional[str] = None
-    price_display: Optional[str] = None
-    price_value: Optional[float] = None
-    original_display: Optional[str] = None
-    original_value: Optional[float] = None
-    discount_display: Optional[str] = None
-    discount_percent: Optional[float] = None
-    images: List[str] = field(default_factory=list)
-    sizes: List[str] = field(default_factory=list)
+    # Hybrid retriever blend
+    "hybrid_alpha": 0.5,          # alpha*dense + (1-alpha)*bm25
 
+    # Re-ranking (kept OFF to lower cost)
+    "use_llm_rerank": False,      # set True to enable
+    "rerank_top_m": 5,
+
+    # Reproducibility
+    "random_seed": 42,
+}
+# ===================================================================
+
+random.seed(CONFIG["random_seed"]) ; np.random.seed(CONFIG["random_seed"])
+
+# ========================= Data model =========================
 @dataclass
 class ProductDoc:
-    # identifiers
     doc_id: str
     category: str
-
-    # primary attributes
     title: Optional[str]
     url: Optional[str]
-    brand: Optional[str]
-
-    # price (current + original + discount)
     price_value: Optional[float]
     price_display: Optional[str]
-    price_original_value: Optional[float] = None
-    price_original_display: Optional[str] = None
-    discount_display: Optional[str] = None
-    discount_percent: Optional[float] = None
+    rating_avg: Optional[float]
+    rating_count: Optional[int]
+    sold_count: Optional[int]
+    brand: Optional[str]
+    seller_name: Optional[str]
+    colors: Optional[List[str]]
+    description: Optional[str]
+    source_path: str
+    raw: Dict[str, Any]
 
-    # social proof
-    rating_avg: Optional[float] = None
-    rating_count: Optional[int] = None
-
-    # marketplace dynamics
-    sold_count: Optional[int] = None
-    seller_name: Optional[str] = None
-    seller_link: Optional[str] = None
-    seller_metrics: Dict[str, Any] = field(default_factory=dict)
-
-    # merchandising
-    colors: List[str] = field(default_factory=list)
-    sizes: List[str] = field(default_factory=list)
-    images: List[str] = field(default_factory=list)
-
-    # PDP details
-    description: Optional[str] = None
-    description_html: Optional[str] = None
-    highlights: List[str] = field(default_factory=list)
-    specifications: List[Dict[str, Any]] = field(default_factory=list)
-    whats_in_the_box: Optional[str] = None
-
-    # logistics / policy
-    delivery_options: List[Dict[str, Optional[str]]] = field(default_factory=list)
-    return_and_warranty: List[str] = field(default_factory=list)
-
-    # variants
-    variants: List[Variant] = field(default_factory=list)
-
-    # bookkeeping
-    source_path: str = ""
-    raw: Dict[str, Any] = field(default_factory=dict)
-
-
-# ------------------ Helpers ------------------
+_number_re = re.compile(r"(\d[\d,\.]*)")
 
 def _first(*vals):
     for v in vals:
@@ -167,388 +145,179 @@ def _first(*vals):
     return None
 
 def _to_https(u: Optional[str]) -> Optional[str]:
-    if not u:
-        return None
-    u = str(u).strip()
-    if u.startswith("//"):
-        return "https:" + u
-    if u.startswith("http"):
-        return u
-    if u.startswith("/"):
-        # site-relative; assume daraz main host
-        return "https://www.daraz.com.bd" + u
-    if u.startswith("www."):
-        return "https://" + u
+    if not u: return None
+    u = u.strip()
+    if u.startswith("//"): return "https:" + u
+    if u.startswith("http"): return u
+    if u.startswith("/"): return "https://www.daraz.com.bd" + u
+    if u.startswith("www."): return "https://" + u
     return u
 
-def _ensure_list(x) -> List[Any]:
-    if x is None:
-        return []
-    if isinstance(x, list):
-        return x
-    return [x]
-
-def _to_https_list(urls: Optional[List[str]]) -> List[str]:
-    return [v for v in (_to_https(u) for u in (urls or [])) if v]
-
-_number_re = re.compile(r"(\d[\d,\.]*)")
 def _parse_number(s: Optional[str]) -> Optional[float]:
-    if s is None:
-        return None
+    if not s: return None
     m = _number_re.search(str(s))
-    if not m:
-        return None
-    try:
-        return float(m.group(1).replace(",", ""))
-    except Exception:
-        return None
+    if not m: return None
+    try: return float(m.group(1).replace(",", ""))
+    except Exception: return None
 
 def _parse_int(s: Optional[str]) -> Optional[int]:
     v = _parse_number(s)
     return int(v) if v is not None else None
 
-def _parse_sold(location_val: Optional[str]) -> Optional[int]:
-    if not location_val:
-        return None
-    m = re.search(r"(\d[\d,]*)\s*sold", str(location_val), flags=re.I)
-    if m:
-        try:
-            return int(m.group(1).replace(",", ""))
-        except Exception:
-            return None
-    return _parse_int(location_val)  # fallback
 
-def _get_nested(d: Dict[str, Any], path: List[str], default=None):
-    cur = d
-    for p in path:
-        if not isinstance(cur, dict) or p not in cur:
-            return default
-        cur = cur[p]
-    return cur
-
-def _norm_price(p: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[float],
-                                                      Optional[str], Optional[float],
-                                                      Optional[str], Optional[float]]:
-    """
-    Returns:
-      display, value, original_display, original_value, discount_display, discount_percent
-    """
-    if not isinstance(p, dict):
-        return None, None, None, None, None, None
-    return (
-        _first(p.get("display")),
-        _parse_number(_first(p.get("value"))),
-        _first(p.get("original_display")),
-        _parse_number(_first(p.get("original_value"))),
-        _first(p.get("discount_display")),
-        _parse_number(_first(p.get("discount_percent")))
-    )
-
-
-# --------------- Normalization ----------------
-
-def normalize_product(
-    prod: Dict[str, Any],
-    category: str,
-    source_path: str,
-    raw_id_override: Optional[str] = None
-) -> ProductDoc:
-    # Robust ID (prefer override or explicit IDs; else hash)
-    raw_id = _first(
-        raw_id_override,
-        prod.get("data_item_id"),
-        prod.get("data_sku_simple"),
-        prod.get("id"),
-    )
+def normalize_product(prod: Dict[str, Any], category: str, source_path: str) -> ProductDoc:
+    raw_id = _first(prod.get("data_item_id"), prod.get("data_sku_simple"))
     if not raw_id:
-        # stable hash from title+url
-        base = (_first(prod.get("product_title"), prod.get("name"), _get_nested(prod, ["detail", "name"], "")) or "") \
-               + "|" + (_first(prod.get("product_detail_url"), prod.get("detail_url"), prod.get("url"), _get_nested(prod, ["detail", "url"], "")) or "")
+        base = (_first(prod.get("product_title"), prod.get("detail", {}).get("name", "")) or "") + "|" + (_first(prod.get("product_detail_url"), prod.get("detail_url"), prod.get("detail", {}).get("url", "")) or "")
         raw_id = hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
 
-    # Title / URL / Brand
-    title = _first(prod.get("product_title"), prod.get("name"), _get_nested(prod, ["detail", "name"]))
-    url = _to_https(_first(prod.get("detail_url"), prod.get("product_detail_url"), prod.get("url"), _get_nested(prod, ["detail", "url"])))
-    brand = _first(prod.get("brand"), _get_nested(prod, ["detail", "brand"]))
+    title = _first(prod.get("product_title"), prod.get("detail", {}).get("name"))
+    url = _to_https(_first(prod.get("detail_url"), prod.get("product_detail_url"), prod.get("detail", {}).get("url")))
+    brand = _first(prod.get("detail", {}).get("brand"), prod.get("brand"))
 
-    # Prices (current + original + discount)
-    p_display, p_value, p_orig_display, p_orig_value, p_disc_display, p_disc_percent = _norm_price(
-        prod.get("price") or _get_nested(prod, ["detail", "price"])
-    )
+    price_display = _first(prod.get("detail", {}).get("price", {}).get("display"), prod.get("product_price"))
+    price_value = _first(prod.get("detail", {}).get("price", {}).get("value"), _parse_number(price_display))
 
-    # Ratings
-    rating_avg = _first(
-        _get_nested(prod, ["detail", "rating", "average"]),
-        _get_nested(prod, ["rating", "average"])
-    )
-    try:
-        rating_avg = float(rating_avg) if rating_avg is not None else None
-    except Exception:
-        rating_avg = None
-
-    rating_count = _first(
-        _get_nested(prod, ["detail", "rating", "count"]),
-        _get_nested(prod, ["rating", "count"])
-    )
+    rating_avg = _first(prod.get("detail", {}).get("rating", {}).get("average"))
+    rating_count = _first(prod.get("detail", {}).get("rating", {}).get("count"))
     if isinstance(rating_count, str):
         rating_count = _parse_int(rating_count)
 
-    # Seller
-    seller_name = _first(_get_nested(prod, ["detail", "seller", "name"]), _get_nested(prod, ["seller", "name"]))
-    seller_link = _to_https(_first(_get_nested(prod, ["seller", "link"]), _get_nested(prod, ["detail", "seller", "link"])))
-    seller_metrics = _get_nested(prod, ["seller", "metrics"], {}) or {}
+    sold_count = _parse_int(prod.get("location"))
+    seller_name = _first(prod.get("detail", {}).get("seller", {}).get("name"))
+    colors = prod.get("detail", {}).get("colors", [])
+    if not isinstance(colors, list):
+        colors = [str(colors)] if colors is not None else []
 
-    # Merchandising
-    colors = [str(c) for c in _ensure_list(prod.get("colors"))]
-    sizes = [str(s) for s in _ensure_list(prod.get("sizes"))]
-    images = _to_https_list(_ensure_list(prod.get("images")))
-
-    # Description & details
-    details_node = prod.get("details") or _get_nested(prod, ["detail", "details"]) or {}
-    description_text = _first(details_node.get("description_text"))
-    description_html = _first(details_node.get("description_html"))
-    highlights = _ensure_list(details_node.get("highlights"))
-    specifications = _ensure_list(details_node.get("specifications"))
-    whats_in_the_box = _first(details_node.get("whats_in_the_box"))
-    raw_text = _first(details_node.get("raw_text"))
-    description = description_text or raw_text
-
-    # Logistics / policy
-    delivery_options: List[Dict[str, Optional[str]]] = []
-    for d in _ensure_list(prod.get("delivery_options")):
-        if isinstance(d, dict):
-            delivery_options.append({
-                "title": _first(d.get("title")),
-                "time": _first(d.get("time")),
-                "fee": _first(d.get("fee")),
-            })
-    return_and_warranty = [str(x) for x in _ensure_list(prod.get("return_and_warranty"))]
-
-    # Variants
-    variants: List[Variant] = []
-    for v in _ensure_list(prod.get("variants")):
-        if not isinstance(v, dict):
-            continue
-        v_display, v_value, v_orig_display, v_orig_value, v_disc_display, v_disc_percent = _norm_price(v.get("price"))
-        variants.append(Variant(
-            color=_first(v.get("color")),
-            price_display=v_display,
-            price_value=float(v_value) if v_value is not None else None,
-            original_display=v_orig_display,
-            original_value=float(v_orig_value) if v_orig_value is not None else None,
-            discount_display=v_disc_display,
-            discount_percent=float(v_disc_percent) if v_disc_percent is not None else None,
-            images=_to_https_list(_ensure_list(v.get("images"))),
-            sizes=[str(s) for s in _ensure_list(v.get("sizes"))],
-        ))
-
-    # Sold count (not present in sample; keep robust parser)
-    sold_count = _parse_sold(prod.get("location"))
+    desc = _first(
+        prod.get("detail", {}).get("details", {}).get("description_text"),
+        prod.get("detail", {}).get("details", {}).get("raw_text"),
+    )
 
     return ProductDoc(
-        doc_id=str(raw_id),
-        category=category,
-        title=str(title) if title else None,
-        url=url,
-        brand=str(brand) if brand else None,
-
-        price_value=float(p_value) if p_value is not None else None,
-        price_display=p_display,
-        price_original_value=float(p_orig_value) if p_orig_value is not None else None,
-        price_original_display=p_orig_display,
-        discount_display=p_disc_display,
-        discount_percent=float(p_disc_percent) if p_disc_percent is not None else None,
-
+        doc_id=str(raw_id), category=category, title=str(title) if title else None,
+        url=url, price_value=float(price_value) if price_value is not None else None,
+        price_display=str(price_display) if price_display else None,
         rating_avg=float(rating_avg) if rating_avg is not None else None,
         rating_count=int(rating_count) if rating_count is not None else None,
-
         sold_count=int(sold_count) if sold_count is not None else None,
-        seller_name=str(seller_name) if seller_name else None,
-        seller_link=seller_link,
-        seller_metrics=seller_metrics,
-
-        colors=colors,
-        sizes=sizes,
-        images=images,
-
-        description=str(description) if description else None,
-        description_html=str(description_html) if description_html else None,
-        highlights=[str(h) for h in highlights],
-        specifications=specifications,
-        whats_in_the_box=str(whats_in_the_box) if whats_in_the_box else None,
-
-        delivery_options=delivery_options,
-        return_and_warranty=[str(r) for r in return_and_warranty],
-
-        variants=variants,
-
-        source_path=source_path,
-        raw=prod,
+        brand=str(brand) if brand else None, seller_name=str(seller_name) if seller_name else None,
+        colors=[str(c) for c in colors] if colors else [], description=str(desc) if desc else None,
+        source_path=source_path, raw=prod,
     )
 
 
-# --------------- Loader (list OR dict) ----------------
-
-def iter_product_docs(root_dir: str) -> List[ProductDoc]:
+def iter_product_docs(root_dir: str, max_docs: Optional[int]=None) -> List[ProductDoc]:
     docs: List[ProductDoc] = []
     for products_json in glob.glob(os.path.join(root_dir, "*", "products.json")):
         category = os.path.basename(os.path.dirname(products_json))
         try:
             with open(products_json, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, list):
+                continue
         except Exception as e:
             print(f"[WARN] Skipping {products_json}: {e}")
             continue
-
-        # Case A: list of product dicts
-        if isinstance(data, list):
-            for prod in data:
-                if not isinstance(prod, dict):
-                    continue
-                doc = normalize_product(prod, category=category, source_path=products_json)
-                docs.append(doc)
-
-        # Case B: dict of {product_id: product_dict}
-        elif isinstance(data, dict):
-            for raw_id, prod in data.items():
-                if not isinstance(prod, dict):
-                    continue
-                doc = normalize_product(prod, category=category, source_path=products_json, raw_id_override=str(raw_id))
-                docs.append(doc)
-        else:
-            print(f"[WARN] Unsupported JSON shape in {products_json}: {type(data).__name__}")
-            continue
-
+        for prod in data:
+            if not isinstance(prod, dict):
+                continue
+            docs.append(normalize_product(prod, category, products_json))
+            if max_docs and len(docs) >= max_docs:
+                return docs
     return docs
 
 
-# --------------- Text Construction ----------------
-
 def product_text(doc: ProductDoc) -> str:
-    """
-    Build a retrieval-friendly representation (no images inline by default).
-    Keeps it compact but info-rich: prices, ratings, seller, attrs, policies, variants summary.
-    """
-    parts = []
-    parts.append(f"PRODUCT_ID: {doc.doc_id}")
-    parts.append(f"CATEGORY: {doc.category}")
+    parts = [f"PRODUCT_ID: {doc.doc_id}", f"CATEGORY: {doc.category}"]
     if doc.title: parts.append(f"TITLE: {doc.title}")
     if doc.brand: parts.append(f"BRAND: {doc.brand}")
-
-    # Price summary
-    if doc.price_display or doc.price_value is not None:
-        price_line = f"PRICE: {doc.price_display or doc.price_value}"
-        if doc.price_original_display or doc.price_original_value is not None:
-            price_line += f" | ORIGINAL: {doc.price_original_display or doc.price_original_value}"
-        if doc.discount_display or doc.discount_percent is not None:
-            # prefer display (e.g., "-48%"), fall back to numeric percent
-            pct = f"{doc.discount_percent:.0f}%" if (doc.discount_percent is not None and doc.discount_display is None) else (doc.discount_display or "")
-            price_line += f" | DISCOUNT: {pct or 'N/A'}"
-        parts.append(price_line)
-
-    # Ratings / sales
+    if doc.price_display: parts.append(f"PRICE: {doc.price_display}")
+    elif doc.price_value is not None: parts.append(f"PRICE_VALUE: {doc.price_value}")
     if doc.rating_avg is not None: parts.append(f"RATING_AVG: {doc.rating_avg:.2f}")
     if doc.rating_count is not None: parts.append(f"RATING_COUNT: {doc.rating_count}")
     if doc.sold_count is not None: parts.append(f"SOLD: {doc.sold_count}")
-
-    # Seller
     if doc.seller_name: parts.append(f"SELLER: {doc.seller_name}")
-    if doc.seller_metrics:
-        metrics_str = "; ".join([f"{k}: {v}" for k, v in doc.seller_metrics.items()])
-        parts.append(f"SELLER_METRICS: {metrics_str}")
-
-    # Attributes
     if doc.colors: parts.append("COLORS: " + ", ".join(doc.colors))
-    if doc.sizes: parts.append("SIZES: " + ", ".join(doc.sizes))
-    if doc.images: parts.append(f"IMAGES_COUNT: {len(doc.images)}")
-
-    # Delivery & policy (compact)
-    if doc.delivery_options:
-        deliv = " | ".join(
-            [", ".join([x for x in [d.get('title'), d.get('time'), d.get('fee')] if x]) for d in doc.delivery_options]
-        )
-        parts.append(f"DELIVERY_OPTIONS: {deliv}")
-    if doc.return_and_warranty:
-        parts.append("RETURN_AND_WARRANTY: " + " | ".join(doc.return_and_warranty))
-
-    # Description & highlights
-    if doc.highlights:
-        parts.append("HIGHLIGHTS: " + " | ".join(map(str, doc.highlights)))
-    if doc.whats_in_the_box:
-        parts.append("WHATS_IN_THE_BOX: " + str(doc.whats_in_the_box))
-    if doc.description:
-        parts.append("DESCRIPTION: " + doc.description)
-
-    # Variants (summary per variant)
-    if doc.variants:
-        vlines = []
-        for v in doc.variants:
-            seg = []
-            if v.color: seg.append(f"color={v.color}")
-            if v.price_display or v.price_value is not None:
-                seg.append(f"price={v.price_display or v.price_value}")
-            if v.discount_display or v.discount_percent is not None:
-                seg.append(f"discount={v.discount_display or (str(v.discount_percent)+'%')}")
-            if v.sizes: seg.append(f"sizes={','.join(v.sizes)}")
-            if v.images: seg.append(f"images={len(v.images)}")
-            vlines.append("{" + ", ".join(seg) + "}")
-        parts.append("VARIANTS: " + " ".join(vlines))
-
+    if doc.description: parts.append(f"DESCRIPTION: {doc.description}")
     if doc.url: parts.append(f"URL: {doc.url}")
-
     return "\n".join(parts)
 
+# ========================= Chunkers =========================
+class Chunker:
+    def chunk(self, text: str) -> List[str]:
+        raise NotImplementedError
 
-# --------- Chunking with Chonkie (fast & simple) ---------
+class RecursiveChunkerWrapper(Chunker):
+    def __init__(self, size_tokens: int, min_chars: int):
+        self._c = RecursiveChunker(tokenizer_or_token_counter=count_tokens,
+                                   chunk_size=size_tokens,
+                                   min_characters_per_chunk=min_chars)
+    def chunk(self, text: str) -> List[str]:
+        return [c.text.strip() for c in self._c(text) if c.text and c.text.strip()]
 
-def chunk_docs(docs: List[ProductDoc]) -> Tuple[List[str], List[Dict[str, Any]]]:
-    """
-    Returns:
-      chunks_texts: List[str]  (to embed)
-      chunks_meta:  List[dict] (metadata per chunk with backrefs)
-    """
-    chunker = RecursiveChunker(
-        tokenizer_or_token_counter=count_tokens,
-        chunk_size=CHUNK_SIZE_TOKENS,
-        # default rules are fine; min chars prevents tiny slivers
-        min_characters_per_chunk=MIN_CHARS_PER_CHUNK,
-    )
+class SentenceChunker(Chunker):
+    def __init__(self, max_tokens: int = 320, overlap_sentences: int = 0):
+        self.max_tokens = max_tokens
+        self.overlap = overlap_sentences
+    def _split_sentences(self, s: str) -> List[str]:
+        parts = re.split(r"(?<=[.!?\n])\s+", s)
+        return [p.strip() for p in parts if p.strip()]
+    def chunk(self, text: str) -> List[str]:
+        sents = self._split_sentences(text)
+        chunks, cur, cur_tok = [], [], 0
+        for sent in sents:
+            t = count_tokens(sent)
+            if cur and cur_tok + t > self.max_tokens:
+                chunks.append(" ".join(cur).strip())
+                if self.overlap > 0:
+                    cur = cur[-self.overlap:]
+                    cur_tok = sum(count_tokens(x) for x in cur)
+                else:
+                    cur, cur_tok = [], 0
+            cur.append(sent)
+            cur_tok += t
+        if cur:
+            chunks.append(" ".join(cur).strip())
+        return chunks
 
-    chunks_texts: List[str] = []
-    chunks_meta: List[Dict[str, Any]] = []
+class SemanticChunker(Chunker):
+    def __init__(self, client: OpenAI, embed_model: str, max_tokens: int = 320, threshold: float = 0.75):
+        self.client = client
+        self.model = embed_model
+        self.max_tokens = max_tokens
+        self.threshold = threshold
+    def _split_sentences(self, s: str) -> List[str]:
+        parts = re.split(r"(?<=[.!?\n])\s+", s)
+        return [p.strip() for p in parts if p.strip()]
+    def _embed(self, texts: List[str]) -> np.ndarray:
+        resp = self.client.embeddings.create(model=self.model, input=[t.replace("\n"," ") for t in texts], encoding_format="float")
+        arr = np.array([d.embedding for d in resp.data], dtype=np.float32)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        return arr / norms
+    def chunk(self, text: str) -> List[str]:
+        sents = self._split_sentences(text)
+        if not sents:
+            return []
+        embs = self._embed(sents)
+        chunks: List[str] = []
+        cur: List[str] = [sents[0]]
+        cur_tok: int = count_tokens(sents[0])
+        for i in range(1, len(sents)):
+            sim = float(embs[i] @ embs[i-1])
+            need_new = sim < self.threshold or (cur_tok + count_tokens(sents[i]) > self.max_tokens)
+            if need_new:
+                chunks.append(" ".join(cur).strip())
+                cur, cur_tok = [sents[i]], count_tokens(sents[i])
+            else:
+                cur.append(sents[i])
+                cur_tok += count_tokens(sents[i])
+        if cur:
+            chunks.append(" ".join(cur).strip())
+        return chunks
 
-    for doc in docs:
-        text = product_text(doc)
-        chunks = chunker(text)  # callable interface
-        for i, ch in enumerate(chunks):
-            clean = ch.text.replace("\u0000", " ").strip()
-            if not clean:
-                continue
-            chunks_texts.append(clean)
-            chunks_meta.append({
-                "doc_id": doc.doc_id,
-                "chunk_idx": i,
-                "category": doc.category,
-                "title": doc.title,
-                "url": doc.url,
-                "price_display": doc.price_display,
-                "price_value": doc.price_value,
-                "price_original_display": doc.price_original_display,
-                "discount_percent": doc.discount_percent,
-                "rating_avg": doc.rating_avg,
-                "rating_count": doc.rating_count,
-                "sold_count": doc.sold_count,
-                "seller_name": doc.seller_name,
-                "images_count": len(doc.images) if doc.images else 0,
-                "sizes": doc.sizes,
-                "source_path": doc.source_path,
-                "token_count": getattr(ch, "token_count", None),
-            })
-    return chunks_texts, chunks_meta
-
-
-# --------- Embedding (OpenAI) + tiny persistent cache ---------
-
+# ========================= Embeddings + cache =========================
 class EmbeddingCache:
     def __init__(self, path: str):
         self.path = path
@@ -556,14 +325,11 @@ class EmbeddingCache:
             with open(self.path, "rb") as f:
                 self._store = pickle.load(f)
         except Exception:
-            self._store = {}  # sha1 -> list[float]
-
+            self._store = {}
     def get(self, key: str):
         return self._store.get(key)
-
     def set(self, key: str, vec: List[float]):
         self._store[key] = vec
-
     def save(self):
         try:
             with open(self.path, "wb") as f:
@@ -572,39 +338,28 @@ class EmbeddingCache:
             print(f"[WARN] Could not save cache: {e}")
 
 def _sha1_for_text_model(text: str, model: str) -> str:
-    h = hashlib.sha1()
-    h.update(model.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(text.encode("utf-8"))
+    h = hashlib.sha1(); h.update(model.encode("utf-8")); h.update(b"\x00"); h.update(text.encode("utf-8"))
     return h.hexdigest()
 
-def embed_texts(client: OpenAI, texts: List[str], model: str, batch_size: int, cache: Optional[EmbeddingCache] = None) -> np.ndarray:
-    """
-    Returns normalized embeddings (L2 unit vectors) as ndarray of shape (N, D)
-    """
-    all_vecs: List[Optional[List[float]]] = []
+def embed_texts(client: OpenAI, texts: List[str], model: str, batch_size: int, cache: Optional[EmbeddingCache]=None) -> np.ndarray:
+    all_vecs: List[Optional[List[float]]] = [None] * len(texts)
     to_embed_idx: List[int] = []
-    keys: List[Optional[str]] = []
+    keys: List[Optional[str]] = [None] * len(texts)
 
-    # Cache lookup
     if cache:
         for i, t in enumerate(texts):
             key = _sha1_for_text_model(t.replace("\n", " "), model)
-            keys.append(key)
+            keys[i] = key
             vec = cache.get(key)
             if vec is None:
                 to_embed_idx.append(i)
-                all_vecs.append(None)  # placeholder
             else:
-                all_vecs.append(vec)
+                all_vecs[i] = vec
     else:
-        keys = [None] * len(texts)
         to_embed_idx = list(range(len(texts)))
-        all_vecs = [None] * len(texts)
 
-    # Batch embed missing
     for start in range(0, len(to_embed_idx), batch_size):
-        batch_ids = to_embed_idx[start:start + batch_size]
+        batch_ids = to_embed_idx[start:start+batch_size]
         if not batch_ids:
             break
         batch = [texts[i].replace("\n", " ") for i in batch_ids]
@@ -614,124 +369,354 @@ def embed_texts(client: OpenAI, texts: List[str], model: str, batch_size: int, c
             all_vecs[i] = vec
             if cache and keys[i]:
                 cache.set(keys[i], vec)
-
     if cache:
         cache.save()
 
-    # Convert to numpy and L2-normalize
     arr = np.array(all_vecs, dtype=np.float32)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
     norms[norms == 0.0] = 1.0
     return arr / norms
 
+# ========================= Indexes =========================
+class DenseIndex:
+    def build(self, vecs: np.ndarray):
+        raise NotImplementedError
+    def search(self, query_vec: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
+        raise NotImplementedError
 
-# --------- Retrieval + prompt assembly ---------
-
-def cosine_topk(query_vec: np.ndarray, mat: np.ndarray, k: int) -> List[int]:
-    # mat: (N, D), query: (D,)
-    scores = mat @ query_vec  # cosine since both sides are normalized
-    # Argpartition for speed; then sort the small slice
-    if k >= len(scores):
-        idx = np.argsort(-scores)
-        return idx.tolist()
-    top_idx = np.argpartition(-scores, k)[:k]
-    top_idx = top_idx[np.argsort(-scores[top_idx])]
-    return top_idx.tolist()
-
-def build_context(retrieved_idx: List[int], chunks_texts: List[str], chunks_meta: List[Dict[str, Any]], limit_products: int) -> Tuple[str, List[Dict[str, Any]]]:
-    seen = set()
-    lines = []
-    included_meta: List[Dict[str, Any]] = []
-    for j in retrieved_idx:
-        meta = chunks_meta[j]
-        doc_id = meta["doc_id"]
-        if doc_id in seen:
-            pass
+class NumpyFlat(DenseIndex):
+    def __init__(self):
+        self.vecs = None
+    def build(self, vecs: np.ndarray):
+        self.vecs = vecs.astype(np.float32, copy=False)
+    def search(self, query_vec: np.ndarray, k: int):
+        scores = self.vecs @ query_vec
+        if k >= len(scores):
+            idx = np.argsort(-scores)
         else:
-            if len(seen) >= limit_products:
-                break
-            seen.add(doc_id)
-        # Compact header per chunk so the model can ground answers
-        header = [
-            f"[DOC {doc_id} | {meta.get('title') or 'Untitled'}]",
-            f"Category: {meta.get('category')}",
-            f"URL: {meta.get('url') or 'N/A'}",
-            f"Price: {meta.get('price_display') or meta.get('price_value') or 'N/A'} "
-            f"(Orig: {meta.get('price_original_display') or 'N/A'}, Disc: {meta.get('discount_percent') if meta.get('discount_percent') is not None else 'N/A'})",
-            f"Rating: {meta.get('rating_avg')} ({meta.get('rating_count')} ratings) | Sold: {meta.get('sold_count')}",
-            f"Seller: {meta.get('seller_name') or 'N/A'} | Images: {meta.get('images_count')} | Sizes: {', '.join(meta.get('sizes') or []) or 'N/A'}",
-        ]
-        lines.append("\n".join(header))
-        lines.append(chunks_texts[j])
-        lines.append("-" * 60)
-        included_meta.append(meta)
-    return "\n".join(lines), included_meta
+            idx = np.argpartition(-scores, k)[:k]
+            idx = idx[np.argsort(-scores[idx])]
+        return idx, scores[idx]
+
+class FaissFlat(DenseIndex):
+    def __init__(self):
+        if faiss is None: raise RuntimeError("faiss not available")
+        self.index = None
+    def build(self, vecs: np.ndarray):
+        d = vecs.shape[1]
+        self.index = faiss.IndexFlatIP(d)
+        self.index.add(vecs)
+    def search(self, query_vec: np.ndarray, k: int):
+        D, I = self.index.search(query_vec.reshape(1,-1).astype(np.float32), k)
+        return I[0], D[0]
+
+class FaissIVF(DenseIndex):
+    def __init__(self, nlist: int = 256, nprobe: int = 8):
+        if faiss is None: raise RuntimeError("faiss not available")
+        self.nlist, self.nprobe, self.index = nlist, nprobe, None
+    def build(self, vecs: np.ndarray):
+        d = vecs.shape[1]
+        quantizer = faiss.IndexFlatIP(d)
+        index = faiss.IndexIVFFlat(quantizer, d, self.nlist, faiss.METRIC_INNER_PRODUCT)
+        index.train(vecs)
+        index.add(vecs)
+        index.nprobe = self.nprobe
+        self.index = index
+    def search(self, query_vec: np.ndarray, k: int):
+        D, I = self.index.search(query_vec.reshape(1,-1).astype(np.float32), k)
+        return I[0], D[0]
+
+class FaissHNSW(DenseIndex):
+    def __init__(self, hnsw_m: int = 32, ef_search: int = 64):
+        if faiss is None: raise RuntimeError("faiss not available")
+        self.hnsw_m, self.ef_search, self.index = hnsw_m, ef_search, None
+    def build(self, vecs: np.ndarray):
+        d = vecs.shape[1]
+        index = faiss.IndexHNSWFlat(d, self.hnsw_m, faiss.METRIC_INNER_PRODUCT)
+        index.hnsw.efSearch = self.ef_search
+        index.add(vecs)
+        self.index = index
+    def search(self, query_vec: np.ndarray, k: int):
+        D, I = self.index.search(query_vec.reshape(1,-1).astype(np.float32), k)
+        return I[0], D[0]
+
+INDEX_REGISTRY = {
+    "numpy": NumpyFlat,
+    "faiss_flat": FaissFlat,
+    "faiss_ivf": FaissIVF,
+    "faiss_hnsw": FaissHNSW,
+}
+
+# ========================= Retrieval =========================
+class Retriever:
+    def prepare(self, corpus_texts: List[str]):
+        pass
+    def score(self, query: str, candidates: List[str], candidate_idx: List[int]) -> List[float]:
+        raise NotImplementedError
+
+class DenseRetriever(Retriever):
+    def __init__(self, client: OpenAI, model: str, cache: EmbeddingCache, chunk_vecs: np.ndarray):
+        self.client, self.model, self.cache = client, model, cache
+        self.chunk_vecs = chunk_vecs
+    def score(self, query: str, candidates: List[str], candidate_idx: List[int]) -> List[float]:
+        qv = embed_texts(self.client, [query], self.model, batch_size=1, cache=self.cache)[0]
+        return (self.chunk_vecs[candidate_idx] @ qv).tolist()
+
+class BM25Retriever(Retriever):
+    def __init__(self):
+        if BM25Okapi is None:
+            raise RuntimeError("rank_bm25 not installed")
+        self.bm25 = None
+    def prepare(self, corpus_texts: List[str]):
+        tok = [self._tokenize(t) for t in corpus_texts]
+        self.bm25 = BM25Okapi(tok)
+    def _tokenize(self, s: str) -> List[str]:
+        s = s.lower(); s = re.sub(r"[^a-z0-9]+", " ", s)
+        return [w for w in s.split() if w]
+    def score(self, query: str, candidates: List[str], candidate_idx: List[int]) -> List[float]:
+        q = self._tokenize(query)
+        scores_full = self.bm25.get_scores(q)
+        return [float(scores_full[i]) for i in candidate_idx]
+
+class HybridRetriever(Retriever):
+    def __init__(self, dense: DenseRetriever, bm25: Optional[BM25Retriever], alpha: float = 0.5):
+        self.dense, self.bm25, self.alpha = dense, bm25, alpha
+    def score(self, query: str, candidates: List[str], candidate_idx: List[int]) -> List[float]:
+        d = np.array(self.dense.score(query, candidates, candidate_idx), dtype=np.float32)
+        if self.bm25 is None: return d.tolist()
+        b = np.array(self.bm25.score(query, candidates, candidate_idx), dtype=np.float32)
+        # per-query normalize
+        def norm(x):
+            if len(x)==0: return x
+            v = x - x.min() if np.isfinite(x).all() else x
+            m = v.max(); return v/(m+1e-6) if m>0 else v
+        h = self.alpha*norm(d) + (1-self.alpha)*norm(b)
+        return h.tolist()
+
+# Optional LLM re-ranker (OFF by default)
+class LLMReranker:
+    def __init__(self, client: OpenAI, model: str):
+        self.client, self.model = client, model
+    def rerank(self, query: str, texts: List[str], top_m: int = 5) -> List[int]:
+        bullets = "\n\n".join([f"[CANDIDATE {i}]\n{texts[i][:800]}" for i in range(len(texts))])
+        prompt = (
+            "Rate relevance (0-100) of each candidate to the query. Return a JSON list of indices in new rank order.\n"
+            f"Query: {query}\n\n{bullets}\n\nReturn only JSON list of integers."
+        )
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model, temperature=0,
+                messages=[{"role":"user","content":prompt}], max_tokens=256,
+            )
+            import json as _json
+            txt = resp.choices[0].message.content.strip()
+            arr = _json.loads(re.findall(r"\[[^\]]*\]", txt)[0])
+            arr = [i for i in arr if isinstance(i, int) and 0 <= i < len(texts)]
+            return arr[:top_m]
+        except Exception:
+            return list(range(min(top_m, len(texts))))
+
+# ========================= Pipeline helpers =========================
+
+def build_chunks(docs: List[ProductDoc], chunker: Chunker) -> Tuple[List[str], List[Dict[str, Any]]]:
+    texts, meta = [], []
+    for doc in docs:
+        t = product_text(doc)
+        parts = chunker.chunk(t)
+        for i, ch in enumerate(parts):
+            clean = ch.replace("\u0000", " ").strip()
+            if not clean: continue
+            texts.append(clean)
+            meta.append({"doc_id": doc.doc_id, "title": doc.title, "category": doc.category, "url": doc.url, "chunk_idx": i})
+    return texts, meta
 
 
-SYSTEM_PROMPT = """You are a precise product QA assistant. Answer ONLY using the provided product context.
-- Prefer items with higher rating and more ratings if the user asks for "best".
-- If the user mentions budget, filter/compare prices accordingly.
-- When specific attributes are requested (brand, colors, size), extract from context exactly.
-- If you don't find an answer in context, say you don't know.
-- Return concise bullet points per product with:
-  Title, Brand, Price (current, original, discount), Rating (avg, count), Sold, Seller (name; basic metrics if present),
-  Colors, Sizes, Delivery, Returns/ Warranty, Variants summary (color + price), and a URL.
-- Do not hallucinate missing values; mark them as N/A.
-"""
+def synthesize_queries(docs: List[ProductDoc], per_doc: int = 1) -> List[Tuple[str, str]]:
+    out: List[Tuple[str, str]] = []
+    for d in docs:
+        cands = []
+        if d.title: cands.append(d.title)
+        if d.brand and d.category: cands.append(f"{d.brand} {d.category}")
+        if d.category: cands.append(f"best {d.category}")
+        seen = set(); cands = [x for x in cands if x and not (x in seen or seen.add(x))]
+        random.shuffle(cands)
+        for q in cands[:per_doc]:
+            out.append((q, d.doc_id))
+    random.shuffle(out)
+    return out
 
-def answer_with_llm(client: OpenAI, model: str, user_query: str, context: str) -> str:
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"User query:\n{user_query}\n\nContext (multiple products & chunks):\n{context}"},
-    ]
-    # Chat Completions are widely supported; simple + reliable.
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=700,
-    )
-    return resp.choices[0].message.content.strip()
+# Metrics
 
+def hit_at_k(ranks: List[Optional[int]], k: int) -> float:
+    return float(np.mean([1.0 if (r is not None and r < k) else 0.0 for r in ranks]))
 
-# ------------------ Main ------------------
+def mrr_at_k(ranks: List[Optional[int]], k: int) -> float:
+    vals = []
+    for r in ranks:
+        if r is not None and r < k: vals.append(1.0 / (r + 1))
+        else: vals.append(0.0)
+    return float(np.mean(vals))
 
-def main():
+# ========================= Runner =========================
+
+def run():
+    C = CONFIG
     t0 = time.time()
     client = OpenAI()
 
-    print(f"[INFO] Loading products from: {ROOT_DIR}")
-    docs = iter_product_docs(ROOT_DIR)
+    print(f"[INFO] Loading products from: {C['root']}")
+    docs = iter_product_docs(C['root'], max_docs=C['max_docs'])
     if not docs:
-        print("[ERROR] No products found. Is the 'result/' folder present and non-empty?")
-        return
-    print(f"[OK] Loaded {len(docs)} products from {ROOT_DIR}")
+        print("[ERROR] No products found. Check CONFIG['root'] path.")
+        sys.exit(1)
+    print(f"[OK] Loaded {len(docs)} docs")
 
-    print("[INFO] Chunking with Chonkie...")
-    chunks_texts, chunks_meta = chunk_docs(docs)
-    print(f"[OK] Produced {len(chunks_texts)} chunks (avg per product: {len(chunks_texts)/max(1,len(docs)):.2f})")
+    qpairs = synthesize_queries(docs, per_doc=C['queries_per_doc'])
+    if C['max_queries']:
+        qpairs = qpairs[:C['max_queries']]
+    print(f"[OK] Using {len(qpairs)} synthetic queries")
 
-    print("[INFO] Embedding chunks (with small local cache for speed)...")
-    cache = EmbeddingCache(EMBED_CACHE_PATH)
-    chunk_vecs = embed_texts(client, chunks_texts, model=EMBED_MODEL, batch_size=EMBED_BATCH_SIZE, cache=cache)
-    print(f"[OK] Embedded chunks => shape {chunk_vecs.shape}")
+    rows = []
 
-    print(f"[INFO] Query: {USER_QUERY}")
-    query_vec = embed_texts(client, [USER_QUERY], model=EMBED_MODEL, batch_size=1, cache=cache)[0]
+    # Prepare chunkers
+    for chunker_name in C['chunkers']:
+        if chunker_name == "recursive":
+            chunker = RecursiveChunkerWrapper(C['chunk_size_tokens'], C['min_chars_per_chunk'])
+        elif chunker_name == "sentence":
+            chunker = SentenceChunker(max_tokens=C['chunk_size_tokens'], overlap_sentences=C['sent_overlap'])
+        elif chunker_name == "semantic":
+            chunker = SemanticChunker(client, C['embed_model'], max_tokens=C['chunk_size_tokens'], threshold=C['semantic_threshold'])
+        else:
+            print(f"[WARN] Unknown chunker {chunker_name}; skipping"); continue
 
-    idx = cosine_topk(query_vec, chunk_vecs, k=TOP_K_CHUNKS)
-    context, included_meta = build_context(idx, chunks_texts, chunks_meta, limit_products=TOP_PRODUCTS)
+        t = time.time()
+        
+        # ----------------------------------------
+        chunks_texts, chunks_meta = build_chunks(docs, chunker)
+        print(f"[OK] {chunker_name} -> {len(chunks_texts)} chunks (avg {len(chunks_texts)/len(docs):.2f}/doc) in {time.time()-t:.2f}s")
 
-    print("[INFO] Asking LLM for the final grounded answer...")
-    answer = answer_with_llm(client, CHAT_MODEL, USER_QUERY, context)
+        # Embed chunks once
+        cache = EmbeddingCache(C['embed_cache_path'])
+        emb_path = f"emb_{chunker_name}.npy"
+        if os.path.exists(emb_path):
+            chunk_vecs = np.load(emb_path)
+            print(f"[OK] Loaded cached embeddings: {chunk_vecs.shape} from {emb_path}")
+        else:
+            t = time.time()
+            chunk_vecs = embed_texts(client, chunks_texts, C['embed_model'],
+                                    batch_size=C['embed_batch_size'], cache=cache)
+            print(f"[OK] Embedded chunks: {chunk_vecs.shape} in {time.time()-t:.2f}s")
+            np.save(emb_path, chunk_vecs)
+            with open(f"chunks_{chunker_name}.jsonl","w",encoding="utf-8") as f:
+                for t in chunks_texts:
+                    f.write(t.replace("\n"," ") + "\n")
 
-    print("\n================= ANSWER =================")
-    print(answer)
-    print("=========================================\n")
+            
+        # t = time.time()
+        
+        
+        # chunk_vecs = embed_texts(client, chunks_texts, C['embed_model'], batch_size=C['embed_batch_size'], cache=cache)
+        # np.save(f"emb_{chunker_name}.npy", chunk_vecs)
+        # with open(f"chunks_{chunker_name}.jsonl","w",encoding="utf-8") as f:
+        #     for t in chunks_texts:
+        #         f.write(t.replace("\n"," ") + "\n")
+        
+        # emb_time = time.time() - t
+        # print(f"[OK] Embedded chunks: {chunk_vecs.shape} in {emb_time:.2f}s")
 
-    elapsed = time.time() - t0
-    print(f"[DONE] Total time: {elapsed:.2f}s | Products: {len(docs)} | Chunks: {len(chunks_texts)}")
+        # Optional BM25
+        bm25_retriever = None
+        if any(r in ("bm25","hybrid","hybrid_rerank") for r in C['retrievers']):
+            if BM25Okapi is None: print("[WARN] rank_bm25 not installed; skipping BM25/Hybrid")
+            else:
+                bm25_retriever = BM25Retriever(); bm25_retriever.prepare(chunks_texts)
 
+        # Build indexes
+        for index_name in C['indexes']:
+            if index_name not in INDEX_REGISTRY:
+                print(f"[WARN] Unknown index {index_name}; skipping"); continue
+            IndexCls = INDEX_REGISTRY[index_name]
+            try:
+                index = IndexCls()
+            except Exception as e:
+                print(f"[WARN] Index backend {index_name} unavailable: {e}"); continue
+
+            t = time.time(); index.build(chunk_vecs); build_time = time.time() - t
+
+            dense = DenseRetriever(client, C['embed_model'], cache, chunk_vecs)
+            retrievers: Dict[str, Retriever] = {}
+            for rname in C['retrievers']:
+                if rname == "dense": retrievers[rname] = dense
+                elif rname == "bm25" and bm25_retriever is not None: retrievers[rname] = bm25_retriever
+                elif rname == "hybrid" and bm25_retriever is not None: retrievers[rname] = HybridRetriever(dense, bm25_retriever, alpha=C['hybrid_alpha'])
+                elif rname.endswith("rerank"):
+                    base = HybridRetriever(dense, bm25_retriever, alpha=C['hybrid_alpha']) if rname=="hybrid_rerank" else dense
+                    retrievers[rname] = base
+                else:
+                    print(f"[WARN] Retriever {rname} unavailable; skipping")
+
+            for retr_name, retr in retrievers.items():
+                ranks: List[Optional[int]] = []
+                q_times: List[float] = []
+                reranker = LLMReranker(client, C['chat_model']) if C['use_llm_rerank'] and retr_name.endswith("rerank") else None
+
+                for (query, target_id) in qpairs:
+                    t = time.time()
+                    # Candidate set from vector index (top 5*K to be safe)
+                    qv = embed_texts(client, [query], C['embed_model'], batch_size=1, cache=cache)[0]
+                    I, D = index.search(qv, k=C['K']*3)
+                    cand_idx = I.tolist()
+                    cand_texts = [chunks_texts[i] for i in cand_idx]
+
+                    scores = retr.score(query, cand_texts, cand_idx)
+                    order = np.argsort(-np.array(scores))
+                    ordered_idx = [cand_idx[i] for i in order]
+
+                    if reranker is not None:
+                        topM = min(C['rerank_top_m'], len(ordered_idx))
+                        sub_texts = [chunks_texts[i] for i in ordered_idx[:topM]]
+                        reord_local = reranker.rerank(query, sub_texts, top_m=topM)
+                        ordered_idx = [ordered_idx[i] for i in reord_local] + ordered_idx[topM:]
+
+                    # rank of correct doc (first matching chunk)
+                    rank = None
+                    for rpos, ci in enumerate(ordered_idx):
+                        if chunks_meta[ci]["doc_id"] == target_id:
+                            rank = rpos; break
+                    ranks.append(rank)
+                    q_times.append(time.time() - t)
+
+                Hk = hit_at_k(ranks, C['K']); MRRk = mrr_at_k(ranks, C['K'])
+                row = {
+                    "chunker": chunker_name,
+                    "index": index_name,
+                    "retriever": retr_name,
+                    "K": C['K'],
+                    "hit@K": round(Hk, 4),
+                    "mrr@K": round(MRRk, 4),
+                    "avg_query_ms": int(1000*np.mean(q_times)) if q_times else None,
+                    "p95_query_ms": int(1000*np.percentile(q_times, 95)) if q_times else None,
+                    "index_build_s": round(build_time, 2),
+                    "num_chunks": len(chunks_texts),
+                    "avg_chunks_per_doc": round(len(chunks_texts)/len(docs), 2),
+                }
+                rows.append(row)
+                print("[RESULT]", row)
+                gc.collect()
+
+    if not rows:
+        print("[ERROR] No results collected"); return
+
+    # Sort best first (mrr desc, then avg latency asc)
+    rows.sort(key=lambda r: (-r["mrr@K"], r["avg_query_ms"] if r["avg_query_ms"] is not None else 1e9))
+
+    # Pretty summary
+    cols = ["chunker","index","retriever","K","hit@K","mrr@K","avg_query_ms","p95_query_ms","index_build_s","num_chunks","avg_chunks_per_doc"]
+    widths = {c: max(len(c), max((len(str(r[c])) for r in rows), default=0)) for c in cols}
+    print("\n==== SUMMARY (best first) ====")
+    print(" ".join(c.ljust(widths[c]) for c in cols))
+    for r in rows:
+        print(" ".join(str(r[c]).ljust(widths[c]) for c in cols))
 
 if __name__ == "__main__":
-    main()
+    run()

@@ -200,6 +200,7 @@ def normalize_product(prod: Dict[str, Any], category: str, source_path: str) -> 
         _get_nested(prod, ["detail", "details", "description_text"]),
         _get_nested(prod, ["detail", "details", "raw_text"]),
     )
+    
 
     return ProductDoc(
         doc_id=str(raw_id),
@@ -298,6 +299,7 @@ def chunk_docs(docs: List[ProductDoc]) -> Tuple[List[str], List[Dict[str, Any]]]
                 "seller_name": doc.seller_name,
                 "source_path": doc.source_path,
                 "token_count": getattr(ch, "token_count", None),
+                "description": doc.description,
             })
     return chunks_texts, chunks_meta
 
@@ -396,13 +398,14 @@ def build_context(retrieved_idx: List[int], chunks_texts: List[str], chunks_meta
     for j in retrieved_idx:
         meta = chunks_meta[j]
         doc_id = meta["doc_id"]
-        if doc_id in seen:
-            # allow multiple chunks per product, but cap unique products
-            pass
-        else:
-            if len(seen) >= limit_products:
-                break
-            seen.add(doc_id)
+        if doc_id not in seen and len(seen) >= limit_products:
+            break
+        seen.add(doc_id)
+
+        desc = meta.get("description") or "N/A"
+        # if isinstance(desc, str) and len(desc) > 300:
+        #     desc = desc[:300].rstrip() + "…"
+            
         # Add a compact header for each chunk so the model can ground answers
         header = [
             f"[DOC {doc_id} | {meta.get('title') or 'Untitled'}]",
@@ -411,6 +414,7 @@ def build_context(retrieved_idx: List[int], chunks_texts: List[str], chunks_meta
             f"Price: {meta.get('price_display') or meta.get('price_value') or 'N/A'}",
             f"Rating: {meta.get('rating_avg')} ({meta.get('rating_count')} ratings) | Sold: {meta.get('sold_count')}",
             f"Seller: {meta.get('seller_name') or 'N/A'}",
+            f"Description: {desc}",
         ]
         lines.append("\n".join(header))
         lines.append(chunks_texts[j])
@@ -423,15 +427,27 @@ SYSTEM_PROMPT = """You are a precise product QA assistant. Answer ONLY using the
 - Prefer items with higher rating and more ratings if the user asks for "best".
 - If the user mentions budget, filter/compare prices accordingly.
 - When specific attributes are requested (brand, colors, size), extract from context exactly.
+- Provide product description if present.
 - If you don't find an answer in context, say you don't know.
-- Return concise bullet points with: Title, Brand, Price, Rating (avg, count), Sold, Seller, and a URL.
-- Do not hallucinate missing values; mark them as N/A.
+
+Return concise bullet points with the following keys (one product per bullet group):
+- Title
+- Brand
+- Price
+- Rating (avg, count)
+- Sold
+- Seller
+- URL
+- Description (≤300 chars; summarize if too long; write N/A if missing)
+
+Do not hallucinate missing values; mark them as N/A.
 """
+
 
 def answer_with_llm(client: OpenAI, model: str, user_query: str, context: str) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"User query:\n{user_query}\n\nContext (multiple products & chunks):\n{context}"},
+        {"role": "user", "content": f"User query:\n{user_query}\n\nContext :\n{context}"},
     ]
     # Chat Completions are widely supported; simple + reliable.
     resp = client.chat.completions.create(
