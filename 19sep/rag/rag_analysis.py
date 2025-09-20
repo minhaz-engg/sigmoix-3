@@ -65,7 +65,8 @@ CONFIG = {
 
     # Chunking strategies to evaluate
     # Choose among: "recursive", "sentence", "semantic"
-    "chunkers": ["recursive", "sentence",],   # keep semantic off by default (turn on to test)
+    # "chunkers": ["recursive", "sentence",],   # keep semantic off by default (turn on to test)
+    "chunkers": ["sentence", "recursive"],   # keep semantic off by default (turn on to test)
 
     # Retrieval methods to evaluate
     # Options: "dense", "bm25", "hybrid", "dense_rerank", "hybrid_rerank"
@@ -77,17 +78,17 @@ CONFIG = {
     "indexes": ["faiss_flat", "faiss_ivf", "faiss_hnsw"],
 
     # Sampling + costs
-    "max_docs": 5000,              # limit dataset size
+    "max_docs": 500,              # limit dataset size
     "queries_per_doc": 1,         # synth queries per doc (low cost)
     "max_queries": 100,           # safety cap across all queries
     "K": 5,                       # metrics@K
 
     # Embedding batch + cache
-    "embed_batch_size": 512,
+    "embed_batch_size": 128,
     "embed_cache_path": ".emb_cache.pkl",
 
     # Chunk sizes
-    "chunk_size_tokens": 320,
+    "chunk_size_tokens": 280,
     "min_chars_per_chunk": 24,
 
     # Sentence chunker
