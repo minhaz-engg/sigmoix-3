@@ -1,0 +1,384 @@
+[
+  {
+    "data_qa_locator": "product-item",
+    "data_tracking": "product-card",
+    "data_sku_simple": "285553135_BD-1282550256",
+    "data_item_id": "285553135",
+    "data_listno": "34",
+    "data_utlogmap": "{\"listno\":34,\"pageIndex\":1,\"pvid\":\"d3e00a0b15813c17644034bb22da9f50\",\"query\":\"\",\"style\":\"wf\",\"x_item_ids\":\"285553135\",\"x_object_id\":\"285553135\",\"x_object_type\":\"item\"}",
+    "data_aplus_ae": "35",
+    "data_spm_anchor_id": "a2a0e.searchlistcategory.list.i34.20683d8etyx9KF",
+    "data_aplus_clk": "x35_2506e267",
+    "product_detail_url": "//www.daraz.com.bd/products/malaysia-chiffon-georgette-jorjet-hijab-niqab-i285553135.html",
+    "image_url": "data:image/png;base64,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",
+    "product_title": "Malaysia Chiffon Georgette Jorjet Hijab - Niqab",
+    "product_price": "৳ 200",
+    "location": "5 sold",
+    "detail_url": "https://www.daraz.com.bd/products/malaysia-chiffon-georgette-jorjet-hijab-niqab-i285553135.html",
+    "detail": {
+      "url": "https://www.daraz.com.bd/products/malaysia-chiffon-georgette-jorjet-hijab-niqab-i285553135.html",
+      "name": "Malaysia Chiffon Georgette Jorjet Hijab - Niqab",
+      "brand": "No Brand",
+      "price": {
+        "display": null,
+        "value": null,
+        "original_display": null,
+        "original_value": null,
+        "discount_display": null,
+        "discount_percent": null
+      },
+      "rating": {
+        "average": 0.0,
+        "count": 0,
+        "raw": "No Ratings"
+      },
+      "images": [
+        "https://img.drz.lazcdn.com/static/bd/p/a8e2d2cfd3250172c4f34edcc4bfcc4a.jpg_720x720q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/a8e2d2cfd3250172c4f34edcc4bfcc4a.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/06f8a83e88dfd517802b0d923e68a59c.jpg_120x120q80.jpg",
+        "https://static-01.daraz.com.bd/p/06f8a83e88dfd517802b0d923e68a59c.jpg"
+      ],
+      "colors": [
+        "Soft Pink"
+      ],
+      "sizes": [],
+      "delivery_options": [],
+      "return_and_warranty": [],
+      "seller": {
+        "name": null,
+        "link": null,
+        "metrics": {}
+      },
+      "details": {
+        "highlights": [],
+        "description_text": "very soft and beautiful plain hijab Quantity: 1 piece easy to wear medium coverage size: 70/30 inch fabrics ; bubble georgette reasonable price this hijab is useful for every women N.B: à¦›à¦¬à¦¿à¦° à¦¸à¦¾à¦¥à§‡ à¦¬à¦¾à¦¸à§à¦¤à¦¬ à¦à¦° à¦•à¦¿à¦›à§à¦Ÿà¦¾ à¦¤à¦¾à¦°à¦¤à¦®à§à¦¯ à¦°à§Ÿà§‡à¦›à§‡ à¦›à¦¬à¦¿à¦¤à§‡ à¦¬à¦¾à¦¸à§à¦¤à¦¬ à¦°à¦‚ à¦¬à§à¦à¦¾ à¦¯à¦¾à§Ÿ à¦¨à¦¾ #niqab",
+        "description_html": null,
+        "specifications": [],
+        "whats_in_the_box": null,
+        "raw_text": "very soft and beautiful plain hijab Quantity: 1 piece easy to wear medium coverage size: 70/30 inch fabrics ; bubble georgette reasonable price this hijab is useful for every women N.B: à¦›à¦¬à¦¿à¦° à¦¸à¦¾à¦¥à§‡ à¦¬à¦¾à¦¸à§à¦¤à¦¬ à¦à¦° à¦•à¦¿à¦›à§à¦Ÿà¦¾ à¦¤à¦¾à¦°à¦¤à¦®à§à¦¯ à¦°à§Ÿà§‡à¦›à§‡ à¦›à¦¬à¦¿à¦¤à§‡ à¦¬à¦¾à¦¸à§à¦¤à¦¬ à¦°à¦‚ à¦¬à§à¦à¦¾ à¦¯à¦¾à§Ÿ à¦¨à¦¾ #niqab"
+      },
+      "variants": []
+    }
+  },
+  {
+    "data_qa_locator": "product-item",
+    "data_tracking": "product-card",
+    "data_sku_simple": "223871774_BD-1169755037",
+    "data_item_id": "223871774",
+    "data_listno": "35",
+    "data_utlogmap": "{\"listno\":35,\"pageIndex\":1,\"pvid\":\"d3e00a0b15813c17644034bb22da9f50\",\"query\":\"\",\"style\":\"wf\",\"x_item_ids\":\"223871774\",\"x_object_id\":\"223871774\",\"x_object_type\":\"item\"}",
+    "data_aplus_ae": "36",
+    "data_spm_anchor_id": "a2a0e.searchlistcategory.list.i35.20683d8etyx9KF",
+    "data_aplus_clk": "x36_5fa47ceb",
+    "product_detail_url": "//www.daraz.com.bd/products/glam-touch-premium-quality-full-coverage-80x30-diamond-georgette-hijab-available-in-30-color-i223871774.html",
+    "image_url": "data:image/png;base64,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",
+    "product_title": "Glam Touch - Premium Quality Full Coverage (80x30) Diamond Georgette Hijab - Available in 30+ Color",
+    "product_price": "৳ 390",
+    "location": "975 sold",
+    "detail_url": "https://www.daraz.com.bd/products/glam-touch-premium-quality-full-coverage-80x30-diamond-georgette-hijab-available-in-30-color-i223871774.html",
+    "detail": {
+      "url": "https://www.daraz.com.bd/products/glam-touch-premium-quality-full-coverage-80x30-diamond-georgette-hijab-available-in-30-color-i223871774.html",
+      "name": "Glam Touch - Premium Quality Full Coverage (80x30) Diamond Georgette Hijab - Available in 30+ Color",
+      "brand": "Glam Touch",
+      "price": {
+        "display": null,
+        "value": null,
+        "original_display": null,
+        "original_value": null,
+        "discount_display": null,
+        "discount_percent": null
+      },
+      "rating": {
+        "average": 0.0,
+        "count": 0,
+        "raw": "No Ratings"
+      },
+      "images": [
+        "https://img.drz.lazcdn.com/static/bd/p/b460dc2069b232482348fdb7ddb7285f.jpg_720x720q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/b460dc2069b232482348fdb7ddb7285f.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/37972a85418d0c911b1654afb27995d9.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/df6cb0b64ace683f8becd73f7c35728e.jpg_120x120q80.jpg",
+        "https://static-01.daraz.com.bd/p/37972a85418d0c911b1654afb27995d9.jpg"
+      ],
+      "colors": [
+        "Glow Yellow"
+      ],
+      "sizes": [
+        "One size"
+      ],
+      "delivery_options": [],
+      "return_and_warranty": [],
+      "seller": {
+        "name": null,
+        "link": null,
+        "metrics": {}
+      },
+      "details": {
+        "highlights": [],
+        "description_text": "Brand: Glam Touch. Materials: Non-Transparent Original Diamond Georgette. 100% Authentic Product & QC Controlled. Soft to touch and easy to drape and style. Semi Stretchable Fabric wills Give You a Perfect Fit. Lightweight & breathable material & Wrinkle-resistant fabric You Will Get Extra Coverage because it’s a Full Coverage Size Hijab. We used Soft Premium Diamond Georgette for Best Feeling & Rough Use. Accurate in Length- 80 inch x Wide 30 Inch QC Finishing & Quality Checked If You Looking for Best Quality Hijab and Modest Accessories , Then Glam Touch will be Your Best Option. “Glam Touch” is a popular “Women’s Clothing Brand” Serving Nationally Since -2019.Our mission is to become the leading Modest Fashion brand for Muslim Women, with the Motto “Glamour of Modesty”We Have More Than 500+ Product Variation, We are mostly popular for modest Muslim wear like; HIJAB, NIQAB JILBAB, KHIMAR, KAFTAN, DESIGNER ABAYAS, CAPES as well as semi-western and traditional dresses. We have so many collections of Ready (Stitch) long and semi-long gowns that's one of our signature items. Our premium hijab and premium Abayas spreads love among hijab lovers. We firmly believe that Clients' Happiness is timeless. We are continuously working to change the Conventional and Upsetting trends and raise expectations and Making Exception for ensuring modern Muslim woman looks confident in modesty and more importantly how she feels.Details of Our Premium Quality Full Coverage Diamond Georgette Plain Hijab:Why Our Hijab are Special: Our Hijab Special in its Size and Coverage 80/30 inch.Client Satisfaction: Who already bought from us can tell you about the quality of our fabrics. We provide the best quality diamond fabrics, which are very soft and will not fade permanently even after repeated pinning, for long time use. Low-quality fabrics are shinier in the beginning, but the color becomes pale after a few days of use, but the gloss of good fabrics is a little less, but it remains for a long time.Match With Picture: Ordering online means trusting with your eyes closed, we use the original picture of each of our products to pay for your trust, and you will get a real match with the picture, you will not be disappointed, In Sha Allah.Quality Stitching and QC Finishing: Each of our hijabs are beautifully piqued around the edges, which won't fray easily, or have any fear of side-splitting, and original hijabs will be tagged with our glam touch.Packaging: It is our responsibility that your ordered product reaches you beautifully intact so packaging is a very important thing, we have made a beautiful box for Hijab comb, only if you order full comb (5 pcs) this box will be given which will not break easily, and Hope your parcel arrives in good condition.",
+        "description_html": null,
+        "specifications": [],
+        "whats_in_the_box": null,
+        "raw_text": "Brand: Glam Touch. Materials: Non-Transparent Original Diamond Georgette. 100% Authentic Product & QC Controlled. Soft to touch and easy to drape and style. Semi Stretchable Fabric wills Give You a Perfect Fit. Lightweight & breathable material & Wrinkle-resistant fabric You Will Get Extra Coverage because it’s a Full Coverage Size Hijab. We used Soft Premium Diamond Georgette for Best Feeling & Rough Use. Accurate in Length- 80 inch x Wide 30 Inch QC Finishing & Quality Checked If You Looking for Best Quality Hijab and Modest Accessories , Then Glam Touch will be Your Best Option. “Glam Touch” is a popular “Women’s Clothing Brand” Serving Nationally Since -2019.Our mission is to become the leading Modest Fashion brand for Muslim Women, with the Motto “Glamour of Modesty”We Have More Than 500+ Product Variation, We are mostly popular for modest Muslim wear like; HIJAB, NIQAB JILBAB, KHIMAR, KAFTAN, DESIGNER ABAYAS, CAPES as well as semi-western and traditional dresses. We have so many collections of Ready (Stitch) long and semi-long gowns that's one of our signature items. Our premium hijab and premium Abayas spreads love among hijab lovers. We firmly believe that Clients' Happiness is timeless. We are continuously working to change the Conventional and Upsetting trends and raise expectations and Making Exception for ensuring modern Muslim woman looks confident in modesty and more importantly how she feels.Details of Our Premium Quality Full Coverage Diamond Georgette Plain Hijab:Why Our Hijab are Special: Our Hijab Special in its Size and Coverage 80/30 inch.Client Satisfaction: Who already bought from us can tell you about the quality of our fabrics. We provide the best quality diamond fabrics, which are very soft and will not fade permanently even after repeated pinning, for long time use. Low-quality fabrics are shinier in the beginning, but the color becomes pale after a few days of use, but the gloss of good fabrics is a little less, but it remains for a long time.Match With Picture: Ordering online means trusting with your eyes closed, we use the original picture of each of our products to pay for your trust, and you will get a real match with the picture, you will not be disappointed, In Sha Allah.Quality Stitching and QC Finishing: Each of our hijabs are beautifully piqued around the edges, which won't fray easily, or have any fear of side-splitting, and original hijabs will be tagged with our glam touch.Packaging: It is our responsibility that your ordered product reaches you beautifully intact so packaging is a very important thing, we have made a beautiful box for Hijab comb, only if you order full comb (5 pcs) this box will be given which will not break easily, and Hope your parcel arrives in good condition."
+      },
+      "variants": []
+    }
+  },
+  {
+    "data_qa_locator": "product-item",
+    "data_tracking": "product-card",
+    "data_sku_simple": "323444376_BD-1540967343",
+    "data_item_id": "323444376",
+    "data_listno": "36",
+    "data_utlogmap": "{\"listno\":36,\"pageIndex\":1,\"pvid\":\"d3e00a0b15813c17644034bb22da9f50\",\"query\":\"\",\"style\":\"wf\",\"x_item_ids\":\"323444376\",\"x_object_id\":\"323444376\",\"x_object_type\":\"item\"}",
+    "data_aplus_ae": "37",
+    "data_spm_anchor_id": "a2a0e.searchlistcategory.list.i36.20683d8etyx9KF",
+    "data_aplus_clk": "x37_1370b5b4",
+    "product_detail_url": "//www.daraz.com.bd/products/trendsetter-upscale-living-leona-living-instant-ready-hijab-with-niqab-for-women-inventive-choice-preferble-low-hassle-and-maintanance-i323444376.html",
+    "image_url": "data:image/png;base64,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",
+    "product_title": "Trendsetter -Upscale Living -Leona Living Instant ready hijab with Niqab for women,- Inventive Choice Preferble - Low Hassle and Maintanance",
+    "product_price": "৳ 349",
+    "location": "Chattogram",
+    "detail_url": "https://www.daraz.com.bd/products/trendsetter-upscale-living-leona-living-instant-ready-hijab-with-niqab-for-women-inventive-choice-preferble-low-hassle-and-maintanance-i323444376.html",
+    "detail": {
+      "url": "https://www.daraz.com.bd/products/trendsetter-upscale-living-leona-living-instant-ready-hijab-with-niqab-for-women-inventive-choice-preferble-low-hassle-and-maintanance-i323444376.html",
+      "name": "Trendsetter -Upscale Living -Leona Living Instant ready hijab with Niqab for women,- Inventive Choice Preferble - Low Hassle and Maintanance",
+      "brand": "No Brand",
+      "price": {
+        "display": null,
+        "value": null,
+        "original_display": null,
+        "original_value": null,
+        "discount_display": null,
+        "discount_percent": null
+      },
+      "rating": {
+        "average": 0.0,
+        "count": 0,
+        "raw": "No Ratings"
+      },
+      "images": [
+        "https://img.drz.lazcdn.com/static/bd/p/1f6b2d9798603d9b762d34c7d97f6d9b.jpg_720x720q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/1f6b2d9798603d9b762d34c7d97f6d9b.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/b8010c4f8f8e39a18337e9a3d1bee2cb.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/2f9f3dea33ae5ee69a11a9afbd51c2d8.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/afe6c4bdf14ed72070b84a8b237900cd.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/cf46615acac95fe2de7af12aa8cd0a52.jpg_120x120q80.jpg",
+        "https://static-01.daraz.com.bd/p/1f6b2d9798603d9b762d34c7d97f6d9b.jpg"
+      ],
+      "colors": [
+        "Apple"
+      ],
+      "sizes": [
+        "One size"
+      ],
+      "delivery_options": [],
+      "return_and_warranty": [],
+      "seller": {
+        "name": null,
+        "link": null,
+        "metrics": {}
+      },
+      "details": {
+        "highlights": [],
+        "description_text": "Brand : NO BRAND Product Type : Instant Ready Hijab Main Material : Chery or Diamond Fabric Size : Long 72 inches wide 30 inches , Fully ready in corner condition Note: Color may be Light / Deep due to display differences in mobile. #hijab collection #hijab #hijab collection #hijab Brand : NO BRANDProduct Type : Instant Ready HijabMain Material : Chery or Diamond FabricSize : Long 72 inches wide 30 inches ,Fully ready in corner conditionNote: Color may be Light / Deep due to display differences in mobile.#hijab collection#hijab#hijab collection#hijab",
+        "description_html": null,
+        "specifications": [],
+        "whats_in_the_box": null,
+        "raw_text": "Brand : NO BRAND Product Type : Instant Ready Hijab Main Material : Chery or Diamond Fabric Size : Long 72 inches wide 30 inches , Fully ready in corner condition Note: Color may be Light / Deep due to display differences in mobile. #hijab collection #hijab #hijab collection #hijab Brand : NO BRANDProduct Type : Instant Ready HijabMain Material : Chery or Diamond FabricSize : Long 72 inches wide 30 inches ,Fully ready in corner conditionNote: Color may be Light / Deep due to display differences in mobile.#hijab collection#hijab#hijab collection#hijab"
+      },
+      "variants": []
+    }
+  },
+  {
+    "data_qa_locator": "product-item",
+    "data_tracking": "product-card",
+    "data_sku_simple": "320023861_BD-1552191878",
+    "data_item_id": "320023861",
+    "data_listno": "37",
+    "data_utlogmap": "{\"listno\":37,\"pageIndex\":1,\"pvid\":\"d3e00a0b15813c17644034bb22da9f50\",\"query\":\"\",\"style\":\"wf\",\"x_item_ids\":\"320023861\",\"x_object_id\":\"320023861\",\"x_object_type\":\"item\"}",
+    "data_aplus_ae": "38",
+    "data_spm_anchor_id": "a2a0e.searchlistcategory.list.i37.20683d8etyx9KF",
+    "data_aplus_clk": "x38_700f455b",
+    "product_detail_url": "//www.daraz.com.bd/products/100-cotton-boil-muslim-namaj-hijab-with-niqab-comfortable-and-modest-full-scarf-i320023861.html",
+    "image_url": "data:image/png;base64,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",
+    "product_title": "100% Cotton Boil Muslim Namaj Hijab with Niqab - Comfortable and Modest Full Scarf",
+    "product_price": "৳ 549",
+    "location": "27 sold",
+    "detail_url": "https://www.daraz.com.bd/products/100-cotton-boil-muslim-namaj-hijab-with-niqab-comfortable-and-modest-full-scarf-i320023861.html",
+    "detail": {
+      "url": "https://www.daraz.com.bd/products/100-cotton-boil-muslim-namaj-hijab-with-niqab-comfortable-and-modest-full-scarf-i320023861.html",
+      "name": "100% Cotton Boil Muslim Namaj Hijab with Niqab - Comfortable and Modest Full Scarf",
+      "brand": "No Brand",
+      "price": {
+        "display": null,
+        "value": null,
+        "original_display": null,
+        "original_value": null,
+        "discount_display": null,
+        "discount_percent": null
+      },
+      "rating": {
+        "average": 0.0,
+        "count": 0,
+        "raw": "No Ratings"
+      },
+      "images": [
+        "https://img.drz.lazcdn.com/static/bd/p/c9d7286f547ab0955452ed09bd2945d1.jpg_720x720q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/c9d7286f547ab0955452ed09bd2945d1.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/292d3056ea933d706c4e20117ffda4d2.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/19e8974d9b1a1707878c340d57fe0618.jpg_120x120q80.jpg",
+        "https://static-01.daraz.com.bd/p/19e8974d9b1a1707878c340d57fe0618.jpg"
+      ],
+      "colors": [
+        "Black"
+      ],
+      "sizes": [
+        "One size"
+      ],
+      "delivery_options": [],
+      "return_and_warranty": [],
+      "seller": {
+        "name": null,
+        "link": null,
+        "metrics": {}
+      },
+      "details": {
+        "highlights": [],
+        "description_text": "100% cotton boil Hijab with niqab High quality swing Best Hijab for Namaj Freesize Lace import from Thailand Free to wash Crafted from 100 percent cotton boil fabric, this Namaj hijab with niqab provides a breathable and comfortable experience, ideal for religious and daily wear. The fabric ensures soft texture and long-lasting durability, offering ease during prayers and modest coverage. Designed in a traditional style, it allows for full facial coverage with its integrated niqab, while maintaining a secure and elegant drape. This hijab is available in standard sizes suitable for women seeking modest Islamic attire with comfort and practicality.",
+        "description_html": null,
+        "specifications": [],
+        "whats_in_the_box": null,
+        "raw_text": "100% cotton boil Hijab with niqab High quality swing Best Hijab for Namaj Freesize Lace import from Thailand Free to wash Crafted from 100 percent cotton boil fabric, this Namaj hijab with niqab provides a breathable and comfortable experience, ideal for religious and daily wear. The fabric ensures soft texture and long-lasting durability, offering ease during prayers and modest coverage. Designed in a traditional style, it allows for full facial coverage with its integrated niqab, while maintaining a secure and elegant drape. This hijab is available in standard sizes suitable for women seeking modest Islamic attire with comfort and practicality."
+      },
+      "variants": []
+    }
+  },
+  {
+    "data_qa_locator": "product-item",
+    "data_tracking": "product-card",
+    "data_sku_simple": "270131055_BD-1241884409",
+    "data_item_id": "270131055",
+    "data_listno": "38",
+    "data_utlogmap": "{\"listno\":38,\"pageIndex\":1,\"pvid\":\"d3e00a0b15813c17644034bb22da9f50\",\"query\":\"\",\"style\":\"wf\",\"x_item_ids\":\"270131055\",\"x_object_id\":\"270131055\",\"x_object_type\":\"item\"}",
+    "data_aplus_ae": "39",
+    "data_spm_anchor_id": "a2a0e.searchlistcategory.list.i38.20683d8etyx9KF",
+    "data_aplus_clk": "x39_1dfb9053",
+    "product_detail_url": "//www.daraz.com.bd/products/nose-niqab-cheery-one-part-muslim-half-niqab-for-women-niqab-hijab-collection-i270131055.html",
+    "image_url": "data:image/png;base64,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",
+    "product_title": "Nose Niqab Cheery One Part Muslim Half niqab for women niqab - Hijab Collection",
+    "product_price": "৳ 78",
+    "location": "20 sold",
+    "detail_url": "https://www.daraz.com.bd/products/nose-niqab-cheery-one-part-muslim-half-niqab-for-women-niqab-hijab-collection-i270131055.html",
+    "detail": {
+      "url": "https://www.daraz.com.bd/products/nose-niqab-cheery-one-part-muslim-half-niqab-for-women-niqab-hijab-collection-i270131055.html",
+      "name": "Nose Niqab Cheery One Part Muslim Half niqab for women niqab - Hijab Collection",
+      "brand": "No Brand",
+      "price": {
+        "display": null,
+        "value": null,
+        "original_display": null,
+        "original_value": null,
+        "discount_display": null,
+        "discount_percent": null
+      },
+      "rating": {
+        "average": 0.0,
+        "count": 0,
+        "raw": "No Ratings"
+      },
+      "images": [
+        "https://img.drz.lazcdn.com/static/bd/p/473b7d1d702ff7bf9dfb1b0c0f5b4d2a.jpg_720x720q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/473b7d1d702ff7bf9dfb1b0c0f5b4d2a.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/cc7a361b9ae4f26031aa200ddf0c671d.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/9c9a963eb2687c0ec3bb6b40c8accf97.jpg_120x120q80.jpg",
+        "https://static-01.daraz.com.bd/p/cc7a361b9ae4f26031aa200ddf0c671d.jpg"
+      ],
+      "colors": [
+        "Maroon"
+      ],
+      "sizes": [
+        "One size"
+      ],
+      "delivery_options": [],
+      "return_and_warranty": [],
+      "seller": {
+        "name": null,
+        "link": null,
+        "metrics": {}
+      },
+      "details": {
+        "highlights": [],
+        "description_text": "Product details of Nose Niqab Cheery One Part Muslim Half niqab for women niqab1 part nikab Half nikab Nose nikab Premium Quality febrics Easy wear Cmfortable to regular use Super stylish Adjustable with khimar, abaya, borka etc Super Soft Febric",
+        "description_html": null,
+        "specifications": [],
+        "whats_in_the_box": null,
+        "raw_text": "Product details of Nose Niqab Cheery One Part Muslim Half niqab for women niqab1 part nikab Half nikab Nose nikab Premium Quality febrics Easy wear Cmfortable to regular use Super stylish Adjustable with khimar, abaya, borka etc Super Soft Febric"
+      },
+      "variants": []
+    }
+  },
+  {
+    "data_qa_locator": "product-item",
+    "data_tracking": "product-card",
+    "data_sku_simple": "275151454_BD-1252603724",
+    "data_item_id": "275151454",
+    "data_listno": "39",
+    "data_utlogmap": "{\"listno\":39,\"pageIndex\":1,\"pvid\":\"d3e00a0b15813c17644034bb22da9f50\",\"query\":\"\",\"style\":\"wf\",\"x_item_ids\":\"275151454\",\"x_object_id\":\"275151454\",\"x_object_type\":\"item\"}",
+    "data_aplus_ae": "40",
+    "data_spm_anchor_id": "a2a0e.searchlistcategory.list.i39.20683d8etyx9KF",
+    "data_aplus_clk": "x40_289e3787",
+    "product_detail_url": "//www.daraz.com.bd/products/cotton-ninja-hijab-inner-scarf-comfortable-headwear-i275151454.html",
+    "image_url": "data:image/png;base64,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",
+    "product_title": "Cotton Ninja Hijab Inner Scarf - Comfortable Headwear",
+    "product_price": "৳ 75",
+    "location": "78 sold",
+    "detail_url": "https://www.daraz.com.bd/products/cotton-ninja-hijab-inner-scarf-comfortable-headwear-i275151454.html",
+    "detail": {
+      "url": "https://www.daraz.com.bd/products/cotton-ninja-hijab-inner-scarf-comfortable-headwear-i275151454.html",
+      "name": "Cotton Ninja Hijab Inner Scarf - Comfortable Headwear",
+      "brand": "No Brand",
+      "price": {
+        "display": null,
+        "value": null,
+        "original_display": null,
+        "original_value": null,
+        "discount_display": null,
+        "discount_percent": null
+      },
+      "rating": {
+        "average": 0.0,
+        "count": 0,
+        "raw": "No Ratings"
+      },
+      "images": [
+        "https://img.drz.lazcdn.com/static/bd/p/7090e4e8c44bdfe0baec54555f8c44e4.jpg_720x720q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/7090e4e8c44bdfe0baec54555f8c44e4.jpg_120x120q80.jpg",
+        "https://img.drz.lazcdn.com/static/bd/p/ee48dac1e5b78c14f5a6660f1217a9e2.jpg_120x120q80.jpg",
+        "https://static-01.daraz.com.bd/p/ee48dac1e5b78c14f5a6660f1217a9e2.jpg"
+      ],
+      "colors": [
+        "Black"
+      ],
+      "sizes": [
+        "One size"
+      ],
+      "delivery_options": [],
+      "return_and_warranty": [],
+      "seller": {
+        "name": null,
+        "link": null,
+        "metrics": {}
+      },
+      "details": {
+        "highlights": [],
+        "description_text": "Product details of Islamic Muslim Cotton Headscarf Inner Ninja Hijab Scarf Hijab Inner Cap Ultra Soft Febrics Color family: Black Free Size (Fit for all) Very Reasonable price Easy to Wear High Quality Imported Islamic Muslim Cotton Headscarf Inner Ninja Hijab Scarf - Hijab Collection: This Islamic Muslim Cotton Headscarf Inner Ninja Hijab Scarf is designed for comfort and style. Made from soft cotton material, it provides a breathable and smooth fit under your hijab, ensuring all-day comfort. The inner ninja design offers full coverage, providing extra support and preventing your hijab from slipping. Available in one size, this scarf is an essential accessory for any hijab collection, ideal for daily wear or special occasions.",
+        "description_html": null,
+        "specifications": [],
+        "whats_in_the_box": null,
+        "raw_text": "Product details of Islamic Muslim Cotton Headscarf Inner Ninja Hijab Scarf Hijab Inner Cap Ultra Soft Febrics Color family: Black Free Size (Fit for all) Very Reasonable price Easy to Wear High Quality Imported Islamic Muslim Cotton Headscarf Inner Ninja Hijab Scarf - Hijab Collection: This Islamic Muslim Cotton Headscarf Inner Ninja Hijab Scarf is designed for comfort and style. Made from soft cotton material, it provides a breathable and smooth fit under your hijab, ensuring all-day comfort. The inner ninja design offers full coverage, providing extra support and preventing your hijab from slipping. Available in one size, this scarf is an essential accessory for any hijab collection, ideal for daily wear or special occasions."
+      },
+      "variants": []
+    }
+  }
+]
